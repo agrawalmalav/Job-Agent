@@ -1,0 +1,6 @@
+apify-client
+python-dotenv
+PyYAML
+pandas
+streamlit
+pytest

@@ -1,0 +1,78 @@
+apify:
+  actor_id: "curious_coder/linkedin-jobs-scraper"
+  count: 100
+  scrape_company: true
+  split_by_location: false
+
+linkedin_search_urls:
+  - "https://www.linkedin.com/jobs/search/?keywords=%28%22AI%20Engineer%22%20OR%20%22Artificial%20Intelligence%20Engineer%22%20OR%20%22Generative%20AI%22%20OR%20%22GenAI%22%20OR%20%22LLM%22%20OR%20%22Large%20Language%20Model%22%20OR%20%22Agentic%20AI%22%20OR%20%22AI%20Agent%22%20OR%20%22RAG%22%20OR%20%22MLOps%22%20OR%20%22AI%20Platform%22%20OR%20%22Product%20Engineer%22%20OR%20%22Software%20Engineer%20AI%22%20OR%20%22AI%20Product%20Manager%22%20OR%20%22Technical%20Product%20Manager%20AI%22%29&location=United%20Kingdom&geoId=101165590&f_TPR=r604800&f_JT=F&f_E=2%2C3%2C4&sortBy=DD"
+
+paths:
+  sponsor_csv: "data/2026-05-22_sponsor_list.csv"
+  company_aliases: "data/company_aliases.yaml"
+  sqlite_db: "data/jobs.sqlite"
+  raw_dir: "data/raw"
+  reports_dir: "reports"
+
+basic_filter:
+  allowed_employment_types:
+    - "full-time"
+    - "full time"
+    - ""
+    - "unspecified"
+    - "not specified"
+
+  hard_reject_keywords:
+    visa:
+      - "no visa sponsorship"
+      - "cannot sponsor"
+      - "unable to sponsor"
+      - "will not sponsor"
+      - "does not offer sponsorship"
+      - "no sponsorship available"
+      - "must have the right to work in the uk without sponsorship"
+      - "must already have the right to work in the uk"
+
+    clearance:
+      - "security clearance required"
+      - "active sc clearance"
+      - "dv clearance"
+      - "must already hold sc clearance"
+      - "uk citizens only"
+
+  contract_keywords:
+    - "contract"
+    - "outside ir35"
+    - "inside ir35"
+    - "fixed term contract"
+    - "3 month contract"
+    - "6 month contract"
+
+  role_type_negative_keywords:
+    - "part-time"
+    - "part time"
+    - "internship"
+    - "placement year"
+    - "unpaid"
+    - "manual qa"
+    - "qa tester"
+    - "sales executive"
+    - "business development"
+    - "recruitment consultant"
+
+  seniority_negative_keywords:
+    - "principal"
+    - "staff engineer"
+    - "lead engineer"
+    - "tech lead"
+    - "engineering manager"
+    - "head of"
+    - "director"
+    - "vp engineering"
+    - "chief technology officer"
+    - "cto"
+
+  seniority_match_fields:
+    - "title"
+    - "standardized_title"
+    - "seniority_level"

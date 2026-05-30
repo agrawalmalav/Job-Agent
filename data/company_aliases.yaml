@@ -1,0 +1,33 @@
+aliases:
+  pwc:
+    - "pricewaterhousecoopers"
+    - "pricewaterhousecoopers llp"
+    - "price waterhouse coopers"
+
+  ey:
+    - "ernst & young"
+    - "ernst and young"
+    - "ernst & young llp"
+
+  admiral:
+    - "eui"
+    - "eui limited"
+    - "admiral group"
+    - "admiral insurance"
+
+  kpmg:
+    - "kpmg"
+    - "kpmg llp"
+
+  deloitte:
+    - "deloitte"
+    - "deloitte llp"
+
+  meta:
+    - "facebook"
+    - "meta platforms"
+
+  google:
+    - "google"
+    - "deepmind"
+    - "google deepmind"
