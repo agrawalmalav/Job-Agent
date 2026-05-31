@@ -32,6 +32,7 @@ basic_filter:
       - "no sponsorship available"
       - "must have the right to work in the uk without sponsorship"
       - "must already have the right to work in the uk"
+      - "No need for visa sponsorship"
 
     clearance:
       - "security clearance required"
