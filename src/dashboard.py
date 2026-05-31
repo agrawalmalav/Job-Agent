@@ -18,6 +18,7 @@ from src.config_loader import load_config
 from src.main import resolve_path, run_pipeline
 from src.models import PIPELINE_STATUSES, USER_STATUSES
 from src.report_generator import export_jobs_csv, export_standard_csvs
+from src.sponsor_checker import load_sponsor_list
 from src.storage_router import (
     get_distinct_fetched_dates,
     get_job_stats,
@@ -53,7 +54,6 @@ JOB_COLUMNS = [
 ]
 
 TABLE_COLUMNS = [
-    "view",
     "id",
     "title",
     "company_name",
@@ -109,12 +109,6 @@ def _choice_with_default(label: str, values: list[str], key: str, selected_value
     return None if selected == "All" else selected
 
 
-def _cell_value(value: object) -> str:
-    if pd.isna(value):
-        return ""
-    return str(value)
-
-
 def _sponsor_match_summary(matched_rows: str | None) -> pd.DataFrame:
     if not matched_rows:
         return pd.DataFrame(columns=["Company", "Location"])
@@ -153,7 +147,22 @@ def _sponsor_match_summary(matched_rows: str | None) -> pd.DataFrame:
     return pd.DataFrame(summaries).drop_duplicates()
 
 
-def _render_detail(row: dict) -> None:
+def _sponsor_display_rows(rows: list[dict]) -> pd.DataFrame:
+    display_rows = []
+    for row in rows:
+        display_rows.append(
+            {
+                "Company": row.get("Organisation Name") or row.get("organisation_name") or "",
+                "Town/City": row.get("Town/City") or row.get("town_city") or "",
+                "County": row.get("County") or row.get("county") or "",
+                "Type & Rating": row.get("Type & Rating") or row.get("type_rating") or "",
+                "Route": row.get("Route") or row.get("route") or "",
+            }
+        )
+    return pd.DataFrame(display_rows)
+
+
+def _render_detail(row: dict, db_path: str) -> None:
     st.subheader("Selected Job Details")
     title = row.get("title") or "Untitled role"
     company = row.get("company_name") or "Unknown company"
@@ -167,8 +176,23 @@ def _render_detail(row: dict) -> None:
     c2.write(f"**Employment:** {row.get('employment_type') or ''}")
     c2.write(f"**Seniority:** {row.get('seniority_level') or ''}")
     c2.write(f"**Workplace:** {row.get('workplace_type') or ''}")
-    c3.write(f"**Pipeline:** {row.get('pipeline_status') or ''}")
-    c3.write(f"**User:** {row.get('user_status') or ''}")
+
+    current_pipeline_status = row.get("pipeline_status") or "manual_review"
+    current_user_status = row.get("user_status") or "pending"
+    selected_pipeline_status = c3.selectbox(
+        "Pipeline status",
+        PIPELINE_STATUSES,
+        index=PIPELINE_STATUSES.index(current_pipeline_status)
+        if current_pipeline_status in PIPELINE_STATUSES
+        else 0,
+        key=f"dialog_pipeline_{row['id']}",
+    )
+    selected_user_status = c3.selectbox(
+        "User status",
+        USER_STATUSES,
+        index=USER_STATUSES.index(current_user_status) if current_user_status in USER_STATUSES else 0,
+        key=f"dialog_user_{row['id']}",
+    )
     c3.write(f"**Sponsor:** {row.get('sponsor_status') or ''} ({row.get('sponsor_confidence') or ''})")
 
     link_cols = st.columns(2)
@@ -179,7 +203,20 @@ def _render_detail(row: dict) -> None:
 
     if row.get("rejection_reason"):
         st.warning(row["rejection_reason"])
+
+    if row.get("description_text"):
+        st.markdown("#### Job Description")
+        st.text_area("Description", row["description_text"], height=340, disabled=True, label_visibility="collapsed")
+
+    notes = st.text_area(
+        "Notes",
+        value=row.get("user_notes") or "",
+        height=110,
+        key=f"dialog_notes_{row['id']}",
+    )
+
     if row.get("sponsor_matched_name"):
+        st.markdown("#### Sponsor Match")
         st.write(f"Company found on sponsor list: `{row['sponsor_matched_name']}`")
     if row.get("sponsor_matched_rows"):
         sponsor_matches = _sponsor_match_summary(row["sponsor_matched_rows"])
@@ -188,8 +225,22 @@ def _render_detail(row: dict) -> None:
         else:
             st.write("Possible sponsor-list matches")
             st.dataframe(sponsor_matches, use_container_width=True, hide_index=True)
-    if row.get("description_text"):
-        st.text_area("Description", row["description_text"], height=220, disabled=True)
+
+    changed = False
+    if selected_pipeline_status != current_pipeline_status:
+        update_pipeline_status(db_path, row["id"], selected_pipeline_status)
+        changed = True
+    if selected_user_status != current_user_status or notes != (row.get("user_notes") or ""):
+        update_user_status(db_path, row["id"], selected_user_status, notes)
+        changed = True
+    if changed:
+        st.success("Autosaved.")
+        st.rerun()
+
+
+@st.dialog("Job Details", width="large")
+def _job_detail_dialog(row: dict, db_path: str) -> None:
+    _render_detail(row, db_path)
 
 
 def jobs_page(db_path: str) -> None:
@@ -234,62 +285,83 @@ def jobs_page(db_path: str) -> None:
         st.info("No jobs match the current filters.")
         return
 
-    original_by_id = {int(row["id"]): row for row in rows}
-    table_df = pd.DataFrame(rows).reindex(columns=[column for column in TABLE_COLUMNS if column != "view"])
-    table_df.insert(0, "view", False)
-
-    edited_df = st.data_editor(
+    table_df = pd.DataFrame(rows).reindex(columns=TABLE_COLUMNS)
+    table_event = st.dataframe(
         table_df,
         use_container_width=True,
         hide_index=True,
         height=520,
         column_config={
-            "view": st.column_config.CheckboxColumn("View", help="Tick one row to show details below."),
-            "pipeline_status": st.column_config.SelectboxColumn("Pipeline", options=PIPELINE_STATUSES),
-            "user_status": st.column_config.SelectboxColumn("User", options=USER_STATUSES),
-            "user_notes": st.column_config.TextColumn("Notes"),
             "apply_url": st.column_config.LinkColumn("Apply URL"),
             "linkedin_url": st.column_config.LinkColumn("LinkedIn URL"),
         },
-        disabled=[
-            column
-            for column in TABLE_COLUMNS
-            if column not in {"view", "pipeline_status", "user_status", "user_notes"}
-        ],
-        key="jobs_editor",
+        selection_mode="single-row",
+        on_select="rerun",
+        key="jobs_table",
     )
+    st.caption("Click a row to open its details and update statuses.")
 
-    button_cols = st.columns([1, 4])
-    if button_cols[0].button("Save table changes", type="primary"):
-        changed = 0
-        for edited_row in edited_df.to_dict("records"):
-            job_id = int(edited_row["id"])
-            original = original_by_id[job_id]
-            pipeline_status = _cell_value(edited_row.get("pipeline_status")) or "manual_review"
-            user_status = _cell_value(edited_row.get("user_status")) or "pending"
-            notes = _cell_value(edited_row.get("user_notes"))
+    selected_rows = table_event.selection.rows
+    if selected_rows:
+        selected_row = rows[selected_rows[0]]
+        _job_detail_dialog(selected_row, db_path)
 
-            pipeline_changed = pipeline_status != (original.get("pipeline_status") or "")
-            user_changed = user_status != (original.get("user_status") or "pending")
-            notes_changed = notes != (original.get("user_notes") or "")
 
-            if pipeline_changed:
-                update_pipeline_status(db_path, job_id, pipeline_status)
-                changed += 1
-            if user_changed or notes_changed:
-                update_user_status(db_path, job_id, user_status, notes)
-                changed += 1
+def _search_sponsors_supabase(query: str) -> list[dict]:
+    from src.supabase_client import get_supabase_client
 
-        st.success(f"Saved {changed} change{'s' if changed != 1 else ''}.")
-        st.rerun()
+    response = (
+        get_supabase_client()
+        .table("sponsor_companies")
+        .select("organisation_name,town_city,county,type_rating,route")
+        .ilike("organisation_name", f"%{query}%")
+        .order("organisation_name")
+        .limit(250)
+        .execute()
+    )
+    rows = getattr(response, "data", None) or []
+    return [
+        {
+            "Organisation Name": row.get("organisation_name"),
+            "Town/City": row.get("town_city"),
+            "County": row.get("county"),
+            "Type & Rating": row.get("type_rating"),
+            "Route": row.get("route"),
+        }
+        for row in rows
+    ]
 
-    selected_rows = edited_df[edited_df["view"] == True]
-    if selected_rows.empty:
-        st.info("Tick `View` on a row to see full details, links, sponsor row details, and description.")
+
+def sponsor_search_page(config: dict) -> None:
+    st.header("Manual Sponsorship Check")
+    st.caption("Search by substring in the sponsor organisation name, for example `wood`.")
+    query = st.text_input("Company name contains")
+    if not query.strip():
+        st.info("Enter part of a company name to search the sponsor list.")
+        return
+
+    query_text = query.strip()
+    try:
+        if _storage_backend() == "supabase" or _config_backend() == "supabase":
+            matches = _search_sponsors_supabase(query_text)
+        else:
+            sponsor_path = resolve_path(PROJECT_DIR, config.get("paths", {}).get("sponsor_csv", "data/sponsor_list.csv"))
+            rows = load_sponsor_list(sponsor_path)
+            query_lower = query_text.lower()
+            matches = [
+                row
+                for row in rows
+                if query_lower in str(row.get("Organisation Name") or "").lower()
+            ][:250]
+    except Exception as exc:
+        st.error(f"Sponsor search failed: {exc}")
+        return
+
+    st.write(f"{len(matches)} match{'es' if len(matches) != 1 else ''} shown")
+    if matches:
+        st.dataframe(_sponsor_display_rows(matches), use_container_width=True, hide_index=True)
     else:
-        selected_job_id = int(selected_rows.iloc[-1]["id"])
-        selected_row = original_by_id[selected_job_id]
-        _render_detail(selected_row)
+        st.info("No sponsor-list matches found.")
 
 
 def _load_supabase_settings() -> dict:
@@ -438,7 +510,7 @@ def exports_page(db_path: str, reports_dir: str) -> None:
 
 
 def main() -> None:
-    st.set_page_config(page_title="Job Search Agent", layout="wide")
+    st.set_page_config(page_title="Job Search Agent", layout="wide", initial_sidebar_state="collapsed")
     login_required()
     logout_button()
 
@@ -447,11 +519,13 @@ def main() -> None:
     st.title("Job Search Agent")
     st.caption(_dashboard_caption())
 
-    tab_jobs, tab_settings, tab_run, tab_exports = st.tabs(
-        ["Jobs", "Settings", "Run Pipeline", "Exports / Reports"]
+    tab_jobs, tab_sponsor, tab_settings, tab_run, tab_exports = st.tabs(
+        ["Jobs", "Sponsor Search", "Settings", "Run Pipeline", "Exports / Reports"]
     )
     with tab_jobs:
         jobs_page(db_path)
+    with tab_sponsor:
+        sponsor_search_page(config)
     with tab_settings:
         settings_page(config, aliases_path)
     with tab_run:
