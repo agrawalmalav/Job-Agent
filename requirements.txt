@@ -5,4 +5,5 @@ pandas
 streamlit
 supabase
 requests
+bcrypt
 pytest

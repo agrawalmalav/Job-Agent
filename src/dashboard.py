@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 if __package__ is None or __package__ == "":
     sys.path.append(str(Path(__file__).resolve().parents[1]))
 
+from src.auth import login_required, logout_button
 from src.config_loader import load_config
 from src.main import resolve_path, run_pipeline
 from src.models import PIPELINE_STATUSES, USER_STATUSES
@@ -438,6 +439,9 @@ def exports_page(db_path: str, reports_dir: str) -> None:
 
 def main() -> None:
     st.set_page_config(page_title="Job Search Agent", layout="wide")
+    login_required()
+    logout_button()
+
     config, db_path, reports_dir, aliases_path = _paths()
 
     st.title("Job Search Agent")

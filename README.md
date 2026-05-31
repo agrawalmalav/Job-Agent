@@ -93,6 +93,32 @@ The dashboard has tabs for:
 
 Default job view shows accepted and pending jobs. You can filter by fetched date, pipeline status, user status, sponsor status, company, location, keyword, and workplace type.
 
+## Streamlit Login Setup
+
+The dashboard uses a simple username/password login backed by bcrypt password hashes in Streamlit secrets. Users type their normal password, not the hash.
+
+Generate a password hash locally:
+
+```powershell
+python scripts/generate_password_hash.py
+```
+
+Copy the generated hash. In Streamlit Cloud, open App settings -> Secrets and add users like this:
+
+```toml
+[auth.users.user1]
+display_name = "User One"
+password_hash = "$2b$12$PASTE_HASH_HERE"
+
+[auth.users.user2]
+display_name = "User Two"
+password_hash = "$2b$12$PASTE_HASH_HERE"
+```
+
+The hash is generated once per password. To change a password, generate a new hash and replace the old hash in Streamlit secrets.
+
+For local testing, create `.streamlit/secrets.toml` with the same format. Do not commit it; `.streamlit/secrets.toml` is already ignored.
+
 ## LinkedIn Search URLs
 
 Edit `config.yaml`:
