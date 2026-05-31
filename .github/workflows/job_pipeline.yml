@@ -1,0 +1,43 @@
+name: Job Search Pipeline
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Runs daily at 08:00 UTC.
+    # UK time: 08:00 during GMT, 09:00 during BST.
+    - cron: "0 8 * * *"
+
+jobs:
+  run-job-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      CONFIG_BACKEND: supabase
+      STORAGE_BACKEND: supabase
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        run: |
+          pytest
+
+      - name: Run job pipeline
+        run: |
+          python -m src.main
