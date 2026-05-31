@@ -1,8 +1,8 @@
 # Job Search Agent
 
-A local-first Python MVP for UK job discovery and tracking. It fetches LinkedIn jobs via Apify, cleans useful fields, rejects obvious bad matches with configurable keywords, checks companies against your local sponsor-list CSV, stores everything in SQLite, and gives you a Streamlit dashboard for review.
+A local-first Python MVP for UK job discovery and tracking. It fetches LinkedIn jobs via Apify, cleans useful fields, rejects obvious bad matches with configurable keywords, checks companies against a sponsor list, stores jobs in SQLite or Supabase, and gives you a Streamlit dashboard for review.
 
-It does not auto-apply, edit resumes, generate cover letters, use RAG, use a vector database, or use a cloud database.
+It does not auto-apply, edit resumes, generate cover letters, use RAG, or use a vector database.
 
 ## Setup
 
@@ -30,9 +30,31 @@ Add your Apify token to `.env`:
 
 ```text
 APIFY_TOKEN=your_token_here
+STORAGE_BACKEND=sqlite
+CONFIG_BACKEND=local
 ```
 
 Using a virtual environment is recommended, but the app can still read `.env` without one.
+
+## Storage And Config Backends
+
+Default mode is local:
+
+```text
+STORAGE_BACKEND=sqlite
+CONFIG_BACKEND=local
+```
+
+Supabase mode uses the existing Supabase schema and service role key:
+
+```text
+STORAGE_BACKEND=supabase
+CONFIG_BACKEND=supabase
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+```
+
+`STORAGE_BACKEND` controls jobs storage. `CONFIG_BACKEND` controls whether settings come from local `config.yaml` or the Supabase `settings` table.
 
 ## Run The Pipeline
 
@@ -65,11 +87,11 @@ streamlit run src/dashboard.py
 The dashboard has tabs for:
 
 - `Jobs`: filter jobs, open links, update `user_status`, and save notes.
-- `Settings`: edit `config.yaml` and `data/company_aliases.yaml` safely with YAML validation.
+- `Settings`: edit local YAML in local mode, or edit Supabase settings when `CONFIG_BACKEND=supabase`.
 - `Run Pipeline`: trigger the fetch/filter/store pipeline manually.
 - `Exports / Reports`: generate CSV exports.
 
-Default job view shows `pending` jobs. You can filter by fetched date, pipeline status, user status, sponsor status, company, keyword, employment type, and workplace type.
+Default job view shows accepted and pending jobs. You can filter by fetched date, pipeline status, user status, sponsor status, company, location, keyword, and workplace type.
 
 ## LinkedIn Search URLs
 
@@ -165,11 +187,11 @@ pytest
 
 ## Future Cloud Deployment Plan
 
-The current version uses Streamlit and SQLite locally. The code is split so migration is easier later:
+The current version uses Streamlit with SQLite locally, and can also route storage/config to Supabase. The code is split so further migration is easier:
 
 - Pipeline logic lives in `src/main.py` as `run_pipeline(...)`.
-- Database operations are isolated in `src/storage.py`.
+- Database operations are isolated behind `src/storage_router.py`, with SQLite in `src/storage.py` and Supabase in `src/supabase_storage.py`.
 - Config handling is isolated in `src/config_loader.py`.
 - UI code is isolated in `src/dashboard.py`.
 
-A future hosted version could move `storage.py` to Supabase Postgres, rebuild the dashboard in Next.js/Vercel or Streamlit Community Cloud, expose manual pipeline runs through an authenticated API endpoint, and add scheduled daily runs using platform cron.
+A future hosted version could rebuild the dashboard in Next.js/Vercel or Streamlit Community Cloud, expose manual pipeline runs through an authenticated API endpoint, and add scheduled daily runs using platform cron.

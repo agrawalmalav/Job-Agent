@@ -1,6 +1,6 @@
 apify:
   actor_id: "curious_coder/linkedin-jobs-scraper"
-  count: 100
+  count: 10
   scrape_company: true
   split_by_location: false
 

@@ -71,6 +71,48 @@ def load_company_aliases(alias_path: str | Path) -> dict:
     }
 
 
+def load_sponsor_list_from_supabase() -> list[dict]:
+    from .supabase_client import get_supabase_client
+
+    response = (
+        get_supabase_client()
+        .table("sponsor_companies")
+        .select("organisation_name,town_city,county,type_rating,route")
+        .execute()
+    )
+    rows = getattr(response, "data", None) or []
+    return [
+        {
+            "Organisation Name": row.get("organisation_name"),
+            "Town/City": row.get("town_city"),
+            "County": row.get("county"),
+            "Type & Rating": row.get("type_rating"),
+            "Route": row.get("route"),
+        }
+        for row in rows
+    ]
+
+
+def load_company_aliases_from_supabase() -> dict:
+    from .supabase_client import get_supabase_client
+
+    response = (
+        get_supabase_client()
+        .table("company_aliases")
+        .select("brand_name,alias_name")
+        .execute()
+    )
+    rows = getattr(response, "data", None) or []
+    aliases: dict[str, list[str]] = {}
+    for row in rows:
+        brand_name = str(row.get("brand_name") or "").lower().strip()
+        alias_name = str(row.get("alias_name") or "").lower().strip()
+        if not brand_name or not alias_name:
+            continue
+        aliases.setdefault(brand_name, []).append(alias_name)
+    return aliases
+
+
 def _name_column(row: dict[str, Any]) -> str | None:
     for column in LIKELY_NAME_COLUMNS:
         if column in row:

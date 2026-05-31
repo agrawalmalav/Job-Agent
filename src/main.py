@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -11,8 +12,14 @@ from .config_loader import load_config
 from .field_cleaner import clean_apify_job
 from .models import SponsorResult
 from .report_generator import export_standard_csvs
-from .sponsor_checker import check_company_sponsor, load_company_aliases, load_sponsor_list
-from .storage import get_job_stats, init_db, insert_job, job_exists
+from .sponsor_checker import (
+    check_company_sponsor,
+    load_company_aliases,
+    load_company_aliases_from_supabase,
+    load_sponsor_list,
+    load_sponsor_list_from_supabase,
+)
+from .storage_router import get_job_stats, init_db, insert_job, job_exists
 
 
 def parse_args() -> argparse.Namespace:
@@ -43,6 +50,10 @@ def _decide_status_and_score(filter_result, sponsor_result: SponsorResult) -> tu
     return "manual_review", 5
 
 
+def _progress(message: str) -> None:
+    print(message, flush=True)
+
+
 def run_pipeline(
     config_path: str = "config.yaml",
     no_fetch: bool = False,
@@ -50,6 +61,7 @@ def run_pipeline(
 ) -> dict:
     project_dir = Path(config_path).resolve().parent
     load_dotenv(project_dir / ".env")
+    _progress("Loading config...")
     config = load_config(config_path)
 
     paths = config.get("paths", {})
@@ -62,21 +74,30 @@ def run_pipeline(
     init_db(db_path)
 
     if no_fetch:
+        _progress("Loading latest raw jobs...")
         raw_jobs = load_latest_raw_jobs(raw_dir)
         raw_path = "latest raw file"
     else:
+        _progress("Fetching jobs from Apify...")
         raw_jobs = fetch_jobs_from_apify(config)
         raw_path = save_raw_jobs(raw_jobs, raw_dir)
 
     if debug_limit is not None:
         raw_jobs = raw_jobs[:debug_limit]
 
-    sponsor_rows = load_sponsor_list(sponsor_csv)
-    aliases = load_company_aliases(aliases_path)
+    if os.getenv("CONFIG_BACKEND", "local").lower() == "supabase" or os.getenv("STORAGE_BACKEND", "sqlite").lower() == "supabase":
+        _progress("Loading sponsor data and aliases from Supabase...")
+        sponsor_rows = load_sponsor_list_from_supabase()
+        aliases = load_company_aliases_from_supabase()
+    else:
+        _progress("Loading local sponsor data and aliases...")
+        sponsor_rows = load_sponsor_list(sponsor_csv)
+        aliases = load_company_aliases(aliases_path)
 
+    _progress(f"Processing {len(raw_jobs)} jobs...")
     inserted = 0
     duplicates = 0
-    for raw_job in raw_jobs:
+    for index, raw_job in enumerate(raw_jobs, start=1):
         job = clean_apify_job(raw_job)
         if job_exists(db_path, job.linkedin_url, job.apply_url, job.apify_id, job=job):
             duplicates += 1
@@ -93,7 +114,10 @@ def run_pipeline(
             inserted += 1
         else:
             duplicates += 1
+        if index % 10 == 0 or index == len(raw_jobs):
+            _progress(f"Processed {index}/{len(raw_jobs)} jobs...")
 
+    _progress("Exporting CSVs and calculating stats...")
     export_paths = export_standard_csvs(db_path, reports_dir)
     stats = get_job_stats(db_path)
     pipeline_counts = stats.get("pipeline_status", {})

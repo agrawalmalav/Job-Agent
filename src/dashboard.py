@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 import yaml
+from dotenv import load_dotenv
 
 if __package__ is None or __package__ == "":
     sys.path.append(str(Path(__file__).resolve().parents[1]))
@@ -15,7 +17,7 @@ from src.config_loader import load_config
 from src.main import resolve_path, run_pipeline
 from src.models import PIPELINE_STATUSES, USER_STATUSES
 from src.report_generator import export_jobs_csv, export_standard_csvs
-from src.storage import (
+from src.storage_router import (
     get_distinct_fetched_dates,
     get_job_stats,
     get_jobs,
@@ -27,6 +29,7 @@ from src.storage import (
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 CONFIG_PATH = PROJECT_DIR / "config.yaml"
+load_dotenv(PROJECT_DIR / ".env")
 
 JOB_COLUMNS = [
     "id",
@@ -76,6 +79,20 @@ def _paths() -> tuple[dict, str, str, str]:
     aliases_path = resolve_path(PROJECT_DIR, paths.get("company_aliases", "data/company_aliases.yaml"))
     init_db(db_path)
     return config, db_path, reports_dir, aliases_path
+
+
+def _storage_backend() -> str:
+    return os.getenv("STORAGE_BACKEND", "sqlite").lower()
+
+
+def _config_backend() -> str:
+    return os.getenv("CONFIG_BACKEND", "local").lower()
+
+
+def _dashboard_caption() -> str:
+    if _storage_backend() == "supabase":
+        return "Supabase-backed hosted job tracking dashboard."
+    return "SQLite-backed local job tracking dashboard."
 
 
 def _choice(label: str, values: list[str], key: str, default: str = "All") -> str | None:
@@ -274,7 +291,84 @@ def jobs_page(db_path: str) -> None:
         _render_detail(selected_row)
 
 
+def _load_supabase_settings() -> dict:
+    from src.supabase_client import get_supabase_client
+
+    response = (
+        get_supabase_client()
+        .table("settings")
+        .select("key,value_json")
+        .in_("key", ["apify_config", "linkedin_search_urls", "basic_filter"])
+        .execute()
+    )
+    rows = getattr(response, "data", None) or []
+    return {row["key"]: row.get("value_json") for row in rows}
+
+
+def _save_supabase_setting(key: str, value: object) -> None:
+    from src.supabase_client import get_supabase_client
+
+    get_supabase_client().table("settings").upsert(
+        {"key": key, "value_json": value},
+        on_conflict="key",
+    ).execute()
+
+
+def _load_supabase_alias_rows() -> list[dict]:
+    from src.supabase_client import get_supabase_client
+
+    response = (
+        get_supabase_client()
+        .table("company_aliases")
+        .select("id,brand_name,alias_name,created_at")
+        .order("brand_name")
+        .execute()
+    )
+    return getattr(response, "data", None) or []
+
+
+def _settings_page_supabase() -> None:
+    st.header("Settings")
+    st.caption("Settings are loaded from the Supabase `settings` table.")
+    try:
+        settings = _load_supabase_settings()
+    except Exception as exc:
+        st.error(f"Could not load Supabase settings: {exc}")
+        return
+
+    for key, default_value, height in (
+        ("apify_config", {}, 180),
+        ("linkedin_search_urls", [], 160),
+        ("basic_filter", {}, 420),
+    ):
+        text = yaml.safe_dump(settings.get(key) or default_value, sort_keys=False)
+        edited = st.text_area(key, text, height=height, key=f"setting_{key}")
+        if st.button(f"Save {key}", key=f"save_{key}"):
+            try:
+                parsed = yaml.safe_load(edited)
+            except yaml.YAMLError as exc:
+                st.error(f"Invalid YAML for {key}: {exc}")
+            else:
+                _save_supabase_setting(key, parsed)
+                st.success(f"{key} saved.")
+
+    st.subheader("Company aliases")
+    try:
+        alias_rows = _load_supabase_alias_rows()
+    except Exception as exc:
+        st.error(f"Could not load Supabase aliases: {exc}")
+    else:
+        if alias_rows:
+            st.dataframe(pd.DataFrame(alias_rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("No aliases found in Supabase.")
+
+
 def settings_page(config: dict, aliases_path: str) -> None:
+    if _config_backend() == "supabase":
+        _settings_page_supabase()
+        return
+
     st.header("Settings")
     st.caption("Settings are saved to local YAML files. Invalid YAML is rejected before writing.")
 
@@ -347,7 +441,7 @@ def main() -> None:
     config, db_path, reports_dir, aliases_path = _paths()
 
     st.title("Job Search Agent")
-    st.caption("Local SQLite-backed job tracking dashboard.")
+    st.caption(_dashboard_caption())
 
     tab_jobs, tab_settings, tab_run, tab_exports = st.tabs(
         ["Jobs", "Settings", "Run Pipeline", "Exports / Reports"]
