@@ -15,7 +15,7 @@ if __package__ is None or __package__ == "":
 
 from src.auth import login_required, logout_button
 from src.config_loader import load_config
-from src.main import resolve_path, run_pipeline
+from src.main import reprocess_jobs, resolve_path, run_pipeline
 from src.models import PIPELINE_STATUSES, USER_STATUSES
 from src.report_generator import export_jobs_csv, export_standard_csvs
 from src.sponsor_checker import load_sponsor_list
@@ -107,6 +107,14 @@ def _choice_with_default(label: str, values: list[str], key: str, selected_value
     index = options.index(selected_value) if selected_value in options else 0
     selected = st.sidebar.selectbox(label, options, index=index, key=key)
     return None if selected == "All" else selected
+
+
+def _list_to_text(values: list | None) -> str:
+    return "\n".join(str(value) for value in (values or []))
+
+
+def _text_to_list(value: str) -> list[str]:
+    return [line.strip() for line in value.splitlines() if line.strip()]
 
 
 def _sponsor_match_summary(matched_rows: str | None) -> pd.DataFrame:
@@ -409,21 +417,18 @@ def _settings_page_supabase() -> None:
         st.error(f"Could not load Supabase settings: {exc}")
         return
 
-    for key, default_value, height in (
-        ("apify_config", {}, 180),
-        ("linkedin_search_urls", [], 160),
-        ("basic_filter", {}, 420),
-    ):
-        text = yaml.safe_dump(settings.get(key) or default_value, sort_keys=False)
-        edited = st.text_area(key, text, height=height, key=f"setting_{key}")
-        if st.button(f"Save {key}", key=f"save_{key}"):
-            try:
-                parsed = yaml.safe_load(edited)
-            except yaml.YAMLError as exc:
-                st.error(f"Invalid YAML for {key}: {exc}")
-            else:
-                _save_supabase_setting(key, parsed)
-                st.success(f"{key} saved.")
+    config = {
+        "apify": settings.get("apify_config") or {},
+        "linkedin_search_urls": settings.get("linkedin_search_urls") or [],
+        "basic_filter": settings.get("basic_filter") or {},
+        "paths": {},
+    }
+    updated = _config_form(config, show_paths=False)
+    if updated:
+        _save_supabase_setting("apify_config", updated.get("apify", {}))
+        _save_supabase_setting("linkedin_search_urls", updated.get("linkedin_search_urls", []))
+        _save_supabase_setting("basic_filter", updated.get("basic_filter", {}))
+        st.success("Supabase settings saved.")
 
     st.subheader("Company aliases")
     try:
@@ -443,18 +448,24 @@ def settings_page(config: dict, aliases_path: str) -> None:
         return
 
     st.header("Settings")
-    st.caption("Settings are saved to local YAML files. Invalid YAML is rejected before writing.")
+    st.caption("Settings are saved to local config.yaml.")
 
-    config_text = CONFIG_PATH.read_text(encoding="utf-8")
-    edited_config = st.text_area("config.yaml", config_text, height=420)
-    if st.button("Save config.yaml"):
-        try:
-            yaml.safe_load(edited_config)
-        except yaml.YAMLError as exc:
-            st.error(f"Invalid config YAML: {exc}")
-        else:
-            CONFIG_PATH.write_text(edited_config, encoding="utf-8")
-            st.success("config.yaml saved.")
+    updated = _config_form(config, show_paths=True)
+    if updated:
+        CONFIG_PATH.write_text(yaml.safe_dump(updated, sort_keys=False), encoding="utf-8")
+        st.success("config.yaml saved.")
+
+    with st.expander("Advanced YAML editor"):
+        config_text = CONFIG_PATH.read_text(encoding="utf-8")
+        edited_config = st.text_area("config.yaml", config_text, height=420)
+        if st.button("Save raw config.yaml"):
+            try:
+                yaml.safe_load(edited_config)
+            except yaml.YAMLError as exc:
+                st.error(f"Invalid config YAML: {exc}")
+            else:
+                CONFIG_PATH.write_text(edited_config, encoding="utf-8")
+                st.success("config.yaml saved.")
 
     alias_file = Path(aliases_path)
     aliases_text = alias_file.read_text(encoding="utf-8") if alias_file.exists() else "aliases:\n"
@@ -469,19 +480,125 @@ def settings_page(config: dict, aliases_path: str) -> None:
             st.success("company_aliases.yaml saved.")
 
 
+def _config_form(config: dict, show_paths: bool) -> dict | None:
+    apify = config.get("apify", {})
+    basic_filter = config.get("basic_filter", {})
+    hard_reject = basic_filter.get("hard_reject_keywords", {})
+
+    with st.form("config_form"):
+        st.subheader("Apify")
+        actor_id = st.text_input("Actor ID", value=apify.get("actor_id", "curious_coder/linkedin-jobs-scraper"))
+        count = st.number_input("Apify count", min_value=1, max_value=1000, value=int(apify.get("count", 100)))
+        scrape_company = st.checkbox("Scrape company", value=bool(apify.get("scrape_company", True)))
+        split_by_location = st.checkbox("Split by location", value=bool(apify.get("split_by_location", False)))
+
+        st.subheader("LinkedIn Search URLs")
+        urls_text = st.text_area("One URL per line", value=_list_to_text(config.get("linkedin_search_urls", [])), height=150)
+
+        paths = config.get("paths", {}).copy()
+        if show_paths:
+            st.subheader("Paths")
+            paths["sponsor_csv"] = st.text_input("Sponsor CSV", value=paths.get("sponsor_csv", "data/2026-05-22_sponsor_list.csv"))
+            paths["company_aliases"] = st.text_input("Company aliases YAML", value=paths.get("company_aliases", "data/company_aliases.yaml"))
+            paths["sqlite_db"] = st.text_input("SQLite DB", value=paths.get("sqlite_db", "data/jobs.sqlite"))
+            paths["raw_dir"] = st.text_input("Raw jobs directory", value=paths.get("raw_dir", "data/raw"))
+            paths["reports_dir"] = st.text_input("Reports directory", value=paths.get("reports_dir", "reports"))
+
+        st.subheader("Basic Filter")
+        allowed_employment_types = st.text_area(
+            "Allowed employment types",
+            value=_list_to_text(basic_filter.get("allowed_employment_types", [])),
+            height=120,
+        )
+        visa_keywords = st.text_area("Visa hard-reject keywords", value=_list_to_text(hard_reject.get("visa", [])), height=150)
+        clearance_keywords = st.text_area(
+            "Clearance hard-reject keywords",
+            value=_list_to_text(hard_reject.get("clearance", [])),
+            height=120,
+        )
+        contract_keywords = st.text_area(
+            "Contract keywords",
+            value=_list_to_text(basic_filter.get("contract_keywords", [])),
+            height=120,
+        )
+        role_type_negative_keywords = st.text_area(
+            "Role type negative keywords",
+            value=_list_to_text(basic_filter.get("role_type_negative_keywords", [])),
+            height=160,
+        )
+        seniority_negative_keywords = st.text_area(
+            "Seniority negative keywords",
+            value=_list_to_text(basic_filter.get("seniority_negative_keywords", [])),
+            height=150,
+        )
+        seniority_match_fields = st.text_area(
+            "Seniority match fields",
+            value=_list_to_text(basic_filter.get("seniority_match_fields", ["title", "standardized_title", "seniority_level"])),
+            height=90,
+        )
+
+        submitted = st.form_submit_button("Save settings", type="primary")
+    if not submitted:
+        return None
+
+    updated_hard_reject = dict(hard_reject)
+    updated_hard_reject["visa"] = _text_to_list(visa_keywords)
+    updated_hard_reject["clearance"] = _text_to_list(clearance_keywords)
+    updated_config = dict(config)
+    updated_config["apify"] = {
+        "actor_id": actor_id,
+        "count": int(count),
+        "scrape_company": scrape_company,
+        "split_by_location": split_by_location,
+    }
+    updated_config["linkedin_search_urls"] = _text_to_list(urls_text)
+    if show_paths:
+        updated_config["paths"] = paths
+    updated_config["basic_filter"] = {
+        **basic_filter,
+        "allowed_employment_types": _text_to_list(allowed_employment_types),
+        "hard_reject_keywords": updated_hard_reject,
+        "contract_keywords": _text_to_list(contract_keywords),
+        "role_type_negative_keywords": _text_to_list(role_type_negative_keywords),
+        "seniority_negative_keywords": _text_to_list(seniority_negative_keywords),
+        "seniority_match_fields": _text_to_list(seniority_match_fields),
+    }
+    return updated_config
+
+
 def run_pipeline_page() -> None:
     st.header("Run Pipeline")
-    st.write("Trigger the local Apify fetch/filter/store pipeline.")
-    no_fetch = st.checkbox("Use latest raw JSON instead of fetching", value=False)
+    st.write("Trigger the fetch/filter/store pipeline, or reprocess existing jobs after config changes.")
+    mode = st.radio(
+        "Run mode",
+        [
+            "Fetch from Apify and process new jobs",
+            "Use latest raw file and process new jobs",
+            "Reprocess latest raw file and update existing jobs",
+            "Reprocess all jobs already in database",
+        ],
+    )
     debug_limit_enabled = st.checkbox("Debug limit raw jobs processed", value=False)
     debug_limit = None
     if debug_limit_enabled:
         debug_limit = st.number_input("Debug limit", min_value=1, step=1, value=15)
 
-    if st.button("Run job fetch pipeline now", type="primary"):
+    if mode == "Reprocess latest raw file and update existing jobs":
+        st.info("This uses the latest saved Apify raw JSON file. It updates pipeline status, sponsor fields, rejection reasons, and scores for matching existing jobs. It does not change user status or notes.")
+    elif mode == "Reprocess all jobs already in database":
+        st.info("This recalculates every job currently stored in the database. It does not use Apify and does not change user status or notes.")
+
+    if st.button("Run selected pipeline action", type="primary"):
         with st.spinner("Running pipeline..."):
             try:
-                summary = run_pipeline(str(CONFIG_PATH), no_fetch=no_fetch, debug_limit=debug_limit)
+                if mode == "Fetch from Apify and process new jobs":
+                    summary = run_pipeline(str(CONFIG_PATH), no_fetch=False, debug_limit=debug_limit)
+                elif mode == "Use latest raw file and process new jobs":
+                    summary = run_pipeline(str(CONFIG_PATH), no_fetch=True, debug_limit=debug_limit)
+                elif mode == "Reprocess latest raw file and update existing jobs":
+                    summary = reprocess_jobs(str(CONFIG_PATH), scope="latest_raw", debug_limit=debug_limit)
+                else:
+                    summary = reprocess_jobs(str(CONFIG_PATH), scope="all_db", debug_limit=debug_limit)
             except Exception as exc:
                 st.error(f"Pipeline failed: {exc}")
             else:

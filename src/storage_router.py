@@ -47,6 +47,17 @@ def update_pipeline_status(db_path, job_id, pipeline_status):
     return _backend().update_pipeline_status(db_path, job_id, pipeline_status)
 
 
+def update_pipeline_result(db_path, job_id, sponsor_result, filter_result, pipeline_status, final_score):
+    return _backend().update_pipeline_result(
+        db_path,
+        job_id,
+        sponsor_result,
+        filter_result,
+        pipeline_status,
+        final_score,
+    )
+
+
 def get_job_stats(db_path):
     return _backend().get_job_stats(db_path)
 

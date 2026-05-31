@@ -11,6 +11,7 @@ from .utils import json_dumps
 
 
 _APIFY_ID_CACHE: set[str] | None = None
+_APIFY_ID_TO_ID_CACHE: dict[str, int] | None = None
 
 
 JOB_COLUMNS = [
@@ -82,30 +83,35 @@ def _execute(response):
 
 
 def _existing_apify_ids() -> set[str]:
-    global _APIFY_ID_CACHE
+    global _APIFY_ID_CACHE, _APIFY_ID_TO_ID_CACHE
     if _APIFY_ID_CACHE is not None:
         return _APIFY_ID_CACHE
 
     client = get_supabase_client()
     apify_ids: set[str] = set()
+    apify_id_to_id: dict[str, int] = {}
     start = 0
     page_size = 1000
     while True:
         response = (
             client.table("jobs")
-            .select("apify_id")
+            .select("id,apify_id")
             .range(start, start + page_size - 1)
             .execute()
         )
         batch = _execute(response) or []
         for row in batch:
             if row.get("apify_id"):
-                apify_ids.add(str(row["apify_id"]))
+                apify_id = str(row["apify_id"])
+                apify_ids.add(apify_id)
+                if row.get("id") is not None:
+                    apify_id_to_id[apify_id] = row["id"]
         if len(batch) < page_size:
             break
         start += page_size
 
     _APIFY_ID_CACHE = apify_ids
+    _APIFY_ID_TO_ID_CACHE = apify_id_to_id
     return _APIFY_ID_CACHE
 
 
@@ -141,7 +147,8 @@ def _all_signature_rows() -> list[dict]:
 
 def find_duplicate_job(db_path, job: Job) -> dict | None:
     if job.apify_id and str(job.apify_id) in _existing_apify_ids():
-        return {"apify_id": job.apify_id}
+        apify_id = str(job.apify_id)
+        return {"id": (_APIFY_ID_TO_ID_CACHE or {}).get(apify_id), "apify_id": job.apify_id}
     return None
 
 
@@ -201,7 +208,10 @@ def insert_job(
             return False
         raise
     if job.apify_id:
-        _existing_apify_ids().add(str(job.apify_id))
+        apify_id = str(job.apify_id)
+        _existing_apify_ids().add(apify_id)
+        if _APIFY_ID_TO_ID_CACHE is not None:
+            _APIFY_ID_TO_ID_CACHE[apify_id] = payload.get("id")
     return True
 
 
@@ -281,6 +291,35 @@ def update_pipeline_status(db_path, job_id: int, pipeline_status: str) -> None:
     get_supabase_client().table("jobs").update(
         {"pipeline_status": pipeline_status, "status": pipeline_status, "updated_at": now}
     ).eq("id", job_id).execute()
+
+
+def update_pipeline_result(
+    db_path,
+    job_id: int,
+    sponsor_result: SponsorResult,
+    filter_result: BasicFilterResult,
+    pipeline_status: str,
+    final_score: int,
+) -> None:
+    if pipeline_status not in PIPELINE_STATUSES:
+        raise ValueError(f"Invalid pipeline_status: {pipeline_status}")
+    now = datetime.now().isoformat(timespec="seconds")
+    payload = {
+        "sponsor_status": sponsor_result.status,
+        "sponsor_confidence": sponsor_result.confidence,
+        "sponsor_matched_by": sponsor_result.matched_by,
+        "sponsor_search_terms": json_dumps(sponsor_result.search_terms),
+        "sponsor_matched_name": sponsor_result.matched_name,
+        "sponsor_matched_rows": json_dumps(sponsor_result.matched_rows),
+        "pipeline_status": pipeline_status,
+        "status": pipeline_status,
+        "rejection_stage": filter_result.rejection_stage,
+        "rejection_reason": filter_result.rejection_reason,
+        "matched_rejection_keywords": json_dumps(filter_result.matched_keywords),
+        "final_score": final_score,
+        "updated_at": now,
+    }
+    get_supabase_client().table("jobs").update(payload).eq("id", job_id).execute()
 
 
 def get_job_stats(db_path) -> dict:

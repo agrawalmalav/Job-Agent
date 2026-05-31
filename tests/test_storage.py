@@ -7,6 +7,7 @@ from src.storage import (
     insert_job,
     job_exists,
     update_pipeline_status,
+    update_pipeline_result,
     update_user_status,
 )
 
@@ -183,6 +184,30 @@ def test_update_pipeline_status(tmp_path):
     assert row["pipeline_status"] == "accepted"
     assert row["status"] == "accepted"
     assert row["updated_at"] is not None
+
+
+def test_update_pipeline_result_does_not_overwrite_user_status(tmp_path):
+    db_path = tmp_path / "jobs.sqlite"
+    init_db(db_path)
+    insert_job(db_path, make_job(), sponsor(status="not_found"), filter_result(), "manual_review", 5)
+    job_id = get_jobs(db_path)[0]["id"]
+    update_user_status(db_path, job_id, "applied", "already applied")
+
+    rejection = BasicFilterResult(True, "basic_filter", "Rejected in test", {"test": ["keyword"]})
+    update_pipeline_result(
+        db_path,
+        job_id,
+        SponsorResult(status="not_found", confidence="low", matched_by="none"),
+        rejection,
+        "rejected",
+        0,
+    )
+    row = get_jobs(db_path)[0]
+
+    assert row["pipeline_status"] == "rejected"
+    assert row["rejection_reason"] == "Rejected in test"
+    assert row["user_status"] == "applied"
+    assert row["user_notes"] == "already applied"
 
 
 def test_duplicate_detection_by_signature(tmp_path):

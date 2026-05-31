@@ -436,6 +436,57 @@ def update_pipeline_status(db_path: str | Path, job_id: int, pipeline_status: st
         connection.commit()
 
 
+def update_pipeline_result(
+    db_path: str | Path,
+    job_id: int,
+    sponsor_result: SponsorResult,
+    filter_result: BasicFilterResult,
+    pipeline_status: str,
+    final_score: int,
+) -> None:
+    if pipeline_status not in PIPELINE_STATUSES:
+        raise ValueError(f"Invalid pipeline_status: {pipeline_status}")
+
+    now = datetime.now().isoformat(timespec="seconds")
+    with _connect(db_path) as connection:
+        connection.execute(
+            """
+            UPDATE jobs
+            SET sponsor_status = ?,
+                sponsor_confidence = ?,
+                sponsor_matched_by = ?,
+                sponsor_search_terms = ?,
+                sponsor_matched_name = ?,
+                sponsor_matched_rows = ?,
+                pipeline_status = ?,
+                status = ?,
+                rejection_stage = ?,
+                rejection_reason = ?,
+                matched_rejection_keywords = ?,
+                final_score = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                sponsor_result.status,
+                sponsor_result.confidence,
+                sponsor_result.matched_by,
+                json_dumps(sponsor_result.search_terms),
+                sponsor_result.matched_name,
+                json_dumps(sponsor_result.matched_rows),
+                pipeline_status,
+                pipeline_status,
+                filter_result.rejection_stage,
+                filter_result.rejection_reason,
+                json_dumps(filter_result.matched_keywords),
+                final_score,
+                now,
+                job_id,
+            ),
+        )
+        connection.commit()
+
+
 def get_job_stats(db_path: str | Path) -> dict:
     stats: dict[str, dict[str, int]] = {"pipeline_status": {}, "user_status": {}, "sponsor_status": {}}
     with _connect(db_path) as connection:
