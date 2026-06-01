@@ -20,10 +20,12 @@ from src.models import PIPELINE_STATUSES, USER_STATUSES
 from src.report_generator import export_jobs_csv, export_standard_csvs
 from src.sponsor_checker import load_sponsor_list
 from src.storage_router import (
+    apply_agency_status_to_jobs,
     get_distinct_fetched_dates,
     get_job_stats,
     get_jobs,
     init_db,
+    upsert_agency_company,
     update_pipeline_status,
     update_user_status,
 )
@@ -202,6 +204,8 @@ def _render_detail(row: dict, db_path: str) -> None:
         key=f"dialog_user_{row['id']}",
     )
     c3.write(f"**Sponsor:** {row.get('sponsor_status') or ''} ({row.get('sponsor_confidence') or ''})")
+    if row.get("sponsor_status") == "agency":
+        c3.warning("Agency / actual employer unknown")
 
     link_cols = st.columns(2)
     if row.get("apply_url"):
@@ -222,6 +226,23 @@ def _render_detail(row: dict, db_path: str) -> None:
         height=110,
         key=f"dialog_notes_{row['id']}",
     )
+
+    sponsor_classification = st.selectbox(
+        "Sponsor classification",
+        ["Auto", "Agency"],
+        index=1 if row.get("sponsor_status") == "agency" else 0,
+        key=f"dialog_sponsor_classification_{row['id']}",
+    )
+    if sponsor_classification == "Agency" and row.get("sponsor_status") != "agency":
+        upsert_agency_company(
+            db_path,
+            row.get("company_name") or "",
+            notes="Marked from dashboard",
+            added_by=st.session_state.get("username"),
+        )
+        updated_count = apply_agency_status_to_jobs(db_path, row.get("company_name") or "")
+        st.success(f"Marked {row.get('company_name')} as agency and updated {updated_count} existing jobs.")
+        st.rerun()
 
     if row.get("sponsor_matched_name"):
         st.markdown("#### Sponsor Match")
@@ -261,7 +282,7 @@ def jobs_page(db_path: str) -> None:
     user_status_options = ["pending", "All"] + [status for status in USER_STATUSES if status != "pending"]
     user_status_selection = st.sidebar.selectbox("User status", user_status_options, key="user_status")
     user_status = None if user_status_selection == "All" else user_status_selection
-    sponsor_status = _choice("Sponsor status", ["found", "possible", "not_found"], "sponsor_status")
+    sponsor_status = _choice("Sponsor status", ["found", "possible", "not_found", "agency"], "sponsor_status")
     company_search = st.sidebar.text_input("Company search")
     location_search = st.sidebar.text_input("Location search")
     keyword = st.sidebar.text_input("Keyword search")

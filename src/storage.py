@@ -7,6 +7,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from .company_utils import normalize_company_name
 from .models import BasicFilterResult, Job, PIPELINE_STATUSES, SponsorResult, USER_STATUSES
 from .utils import ensure_dir, json_dumps
 
@@ -182,6 +183,22 @@ def init_db(db_path: str | Path) -> None:
                 created_at TEXT
             )
             """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS agency_companies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_name TEXT NOT NULL,
+                normalized_company_name TEXT NOT NULL UNIQUE,
+                notes TEXT,
+                added_by TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_agency_companies_normalized ON agency_companies(normalized_company_name)"
         )
         existing_columns = _columns(connection)
         for column, definition in SCHEMA_COLUMNS.items():
@@ -485,6 +502,85 @@ def update_pipeline_result(
             ),
         )
         connection.commit()
+
+
+def get_agency_company(db_path: str | Path, company_name: str) -> dict | None:
+    normalized = normalize_company_name(company_name)
+    if not normalized:
+        return None
+    with _connect(db_path) as connection:
+        row = connection.execute(
+            "SELECT * FROM agency_companies WHERE normalized_company_name = ? LIMIT 1",
+            (normalized,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def is_agency_company(db_path: str | Path, company_name: str) -> bool:
+    return get_agency_company(db_path, company_name) is not None
+
+
+def upsert_agency_company(
+    db_path: str | Path,
+    company_name: str,
+    notes: str | None = None,
+    added_by: str | None = None,
+) -> None:
+    normalized = normalize_company_name(company_name)
+    if not normalized:
+        raise ValueError("company_name cannot be empty")
+    now = datetime.now().isoformat(timespec="seconds")
+    with _connect(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO agency_companies (company_name, normalized_company_name, notes, added_by, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(normalized_company_name) DO UPDATE SET
+                company_name = excluded.company_name,
+                notes = COALESCE(excluded.notes, agency_companies.notes),
+                added_by = COALESCE(excluded.added_by, agency_companies.added_by),
+                updated_at = excluded.updated_at
+            """,
+            (company_name, normalized, notes, added_by, now, now),
+        )
+        connection.commit()
+
+
+def apply_agency_status_to_jobs(db_path: str | Path, company_name: str) -> int:
+    normalized = normalize_company_name(company_name)
+    if not normalized:
+        return 0
+    now = datetime.now().isoformat(timespec="seconds")
+    with _connect(db_path) as connection:
+        rows = connection.execute("SELECT id, company_name FROM jobs").fetchall()
+        matching_ids = [
+            row["id"]
+            for row in rows
+            if normalize_company_name(row["company_name"] or "") == normalized
+        ]
+        for job_id in matching_ids:
+            connection.execute(
+                """
+                UPDATE jobs
+                SET sponsor_status = 'agency',
+                    sponsor_confidence = 'high',
+                    sponsor_matched_by = 'manual_agency',
+                    sponsor_search_terms = ?,
+                    sponsor_matched_name = ?,
+                    sponsor_matched_rows = '',
+                    pipeline_status = 'manual_review',
+                    status = 'manual_review',
+                    rejection_stage = NULL,
+                    rejection_reason = 'Recruitment agency / actual employer unknown',
+                    matched_rejection_keywords = '',
+                    final_score = 5,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (json_dumps([normalized]), company_name, now, job_id),
+            )
+        connection.commit()
+    return len(matching_ids)
 
 
 def get_job_stats(db_path: str | Path) -> dict:

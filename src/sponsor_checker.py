@@ -8,6 +8,7 @@ from typing import Any
 
 import yaml
 
+from .company_utils import extract_meaningful_tokens, extract_strong_tokens, normalize_company_name
 from .models import SponsorResult
 
 
@@ -20,35 +21,6 @@ LIKELY_NAME_COLUMNS = (
     "Sponsor Name",
     "sponsor_name",
 )
-
-COMMON_WORDS = {
-    "limited",
-    "ltd",
-    "plc",
-    "llp",
-    "inc",
-    "corp",
-    "corporation",
-    "company",
-    "co",
-    "group",
-    "holdings",
-    "uk",
-    "united",
-    "kingdom",
-    "technologies",
-    "technology",
-    "solutions",
-    "services",
-    "consulting",
-    "consultancy",
-    "international",
-    "global",
-    "the",
-    "and",
-    "of",
-}
-
 
 def load_sponsor_list(csv_path: str | Path) -> list[dict]:
     path = Path(csv_path)
@@ -125,24 +97,8 @@ def _sponsor_name(row: dict[str, Any]) -> str:
     return str(row.get(column, "")) if column else ""
 
 
-def _tokens(value: str) -> list[str]:
-    raw_tokens = re.findall(r"[a-z0-9]+", _normalize_text(value))
-    return [
-        token
-        for token in raw_tokens
-        if token not in COMMON_WORDS and len(token) >= 3
-    ]
-
-
 def _row_to_text(row: dict[str, Any]) -> str:
     return json.dumps(row, ensure_ascii=True, sort_keys=True)
-
-
-def _term_matches_name(term: str, sponsor_name: str) -> bool:
-    normalized = _normalize_text(term)
-    if not normalized:
-        return False
-    return normalized in _normalize_text(sponsor_name)
 
 
 def _normalize_text(value: str) -> str:
@@ -151,18 +107,68 @@ def _normalize_text(value: str) -> str:
     return re.sub(r"\s+", " ", normalized).strip()
 
 
-def _find_matches(search_terms: list[str], sponsor_rows: list[dict]) -> tuple[list[str], list[str], list[str]]:
+def _find_phrase_matches(search_terms: list[str], sponsor_rows: list[dict]) -> tuple[list[str], list[str], list[str]]:
     matched_names: list[str] = []
     matched_rows: list[str] = []
     matched_terms: list[str] = []
     for row in sponsor_rows:
         sponsor_name = _sponsor_name(row)
-        row_terms = [term for term in search_terms if _term_matches_name(term, sponsor_name)]
+        normalized_sponsor = normalize_company_name(sponsor_name)
+        row_terms = [
+            term
+            for term in search_terms
+            if normalize_company_name(term) and normalize_company_name(term) in normalized_sponsor
+        ]
         if row_terms:
             matched_names.append(sponsor_name)
             matched_rows.append(_row_to_text(row))
             matched_terms.extend(row_terms)
     return matched_names, matched_rows, list(dict.fromkeys(matched_terms))
+
+
+def _find_exact_normalized_match(company_name: str, sponsor_rows: list[dict]) -> tuple[list[str], list[str]]:
+    target = normalize_company_name(company_name)
+    if not target:
+        return [], []
+    matched_names: list[str] = []
+    matched_rows: list[str] = []
+    for row in sponsor_rows:
+        sponsor_name = _sponsor_name(row)
+        if normalize_company_name(sponsor_name) == target:
+            matched_names.append(sponsor_name)
+            matched_rows.append(_row_to_text(row))
+            if len(matched_rows) >= 10:
+                break
+    return matched_names, matched_rows
+
+
+def _find_all_token_matches(tokens: list[str], sponsor_rows: list[dict]) -> tuple[list[str], list[str]]:
+    matched_names: list[str] = []
+    matched_rows: list[str] = []
+    if not tokens:
+        return matched_names, matched_rows
+    for row in sponsor_rows:
+        sponsor_name = _sponsor_name(row)
+        normalized_sponsor = normalize_company_name(sponsor_name)
+        if all(token in normalized_sponsor for token in tokens):
+            matched_names.append(sponsor_name)
+            matched_rows.append(_row_to_text(row))
+            if len(matched_rows) >= 10:
+                break
+    return matched_names, matched_rows
+
+
+def _count_all_token_matches(tokens: list[str], sponsor_rows: list[dict]) -> int:
+    if not tokens:
+        return 0
+    count = 0
+    for row in sponsor_rows:
+        normalized_sponsor = normalize_company_name(_sponsor_name(row))
+        if all(token in normalized_sponsor for token in tokens):
+            count += 1
+            if count > 10:
+                break
+    return count
 
 
 def _alias_terms(company_name: str, aliases: dict) -> list[str]:
@@ -175,34 +181,20 @@ def _alias_terms(company_name: str, aliases: dict) -> list[str]:
     return list(dict.fromkeys(terms))
 
 
-def _confidence(search_terms: list[str], matched_by: str) -> str:
-    if matched_by == "alias":
-        return "high"
-    if len(search_terms) >= 2:
-        return "high"
-    if search_terms and len(search_terms[0]) >= 5:
-        return "high"
-    if search_terms:
-        return "medium"
-    return "low"
-
-
-def check_company_sponsor(company_name: str, sponsor_rows: list[dict], aliases: dict) -> SponsorResult:
-    direct_terms = _tokens(company_name)
-    matched_names, matched_rows, matched_terms = _find_matches(direct_terms, sponsor_rows)
-    if matched_rows:
-        confidence = _confidence(matched_terms, "direct")
+def check_company_sponsor(company_name: str, sponsor_rows: list[dict], aliases: dict, agency_checker=None) -> SponsorResult:
+    normalized_company_name = normalize_company_name(company_name)
+    if agency_checker and agency_checker(company_name):
         return SponsorResult(
-            status="found" if confidence == "high" else "possible",
-            confidence=confidence,
-            matched_by="direct",
-            search_terms=direct_terms,
-            matched_name=matched_names[0],
-            matched_rows=matched_rows,
+            status="agency",
+            confidence="high",
+            matched_by="agency_list",
+            search_terms=[normalized_company_name],
+            matched_name=company_name,
+            matched_rows=[],
         )
 
     alias_terms = _alias_terms(company_name, aliases)
-    matched_names, matched_rows, _matched_terms = _find_matches(alias_terms, sponsor_rows)
+    matched_names, matched_rows, _matched_terms = _find_phrase_matches(alias_terms, sponsor_rows)
     if matched_rows:
         return SponsorResult(
             status="found",
@@ -213,11 +205,50 @@ def check_company_sponsor(company_name: str, sponsor_rows: list[dict], aliases: 
             matched_rows=matched_rows,
         )
 
+    matched_names, matched_rows = _find_exact_normalized_match(company_name, sponsor_rows)
+    if matched_rows:
+        return SponsorResult(
+            status="found",
+            confidence="high",
+            matched_by="direct",
+            search_terms=[normalized_company_name],
+            matched_name=matched_names[0],
+            matched_rows=matched_rows,
+        )
+
+    meaningful_tokens = extract_meaningful_tokens(company_name)
+    strong_tokens = extract_strong_tokens(company_name)
+    search_terms = strong_tokens or meaningful_tokens
+    if len(strong_tokens) >= 2:
+        total_matches = _count_all_token_matches(strong_tokens, sponsor_rows)
+        matched_names, matched_rows = _find_all_token_matches(strong_tokens, sponsor_rows)
+        if matched_rows:
+            return SponsorResult(
+                status="possible" if total_matches > 10 else "found",
+                confidence="low" if total_matches > 10 else "high",
+                matched_by="direct_tokens",
+                search_terms=strong_tokens,
+                matched_name=matched_names[0],
+                matched_rows=matched_rows,
+            )
+    elif len(strong_tokens) == 1 and len(strong_tokens[0]) >= 4:
+        total_matches = _count_all_token_matches(strong_tokens, sponsor_rows)
+        matched_names, matched_rows = _find_all_token_matches(strong_tokens, sponsor_rows)
+        if matched_rows:
+            return SponsorResult(
+                status="possible" if total_matches > 10 else "found",
+                confidence="low" if total_matches > 10 else "high",
+                matched_by="direct_token",
+                search_terms=strong_tokens,
+                matched_name=matched_names[0],
+                matched_rows=matched_rows,
+            )
+
     return SponsorResult(
         status="not_found",
         confidence="low",
         matched_by="none",
-        search_terms=direct_terms + alias_terms,
+        search_terms=search_terms + alias_terms,
         matched_name=None,
         matched_rows=[],
     )

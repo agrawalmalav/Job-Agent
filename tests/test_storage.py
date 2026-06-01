@@ -9,6 +9,9 @@ from src.storage import (
     update_pipeline_status,
     update_pipeline_result,
     update_user_status,
+    upsert_agency_company,
+    is_agency_company,
+    apply_agency_status_to_jobs,
 )
 
 
@@ -208,6 +211,31 @@ def test_update_pipeline_result_does_not_overwrite_user_status(tmp_path):
     assert row["rejection_reason"] == "Rejected in test"
     assert row["user_status"] == "applied"
     assert row["user_notes"] == "already applied"
+
+
+def test_agency_company_updates_matching_jobs_without_user_status(tmp_path):
+    db_path = tmp_path / "jobs.sqlite"
+    init_db(db_path)
+    insert_job(db_path, make_job(company_name="Harnham"), sponsor(status="not_found"), filter_result(), "manual_review", 5)
+    insert_job(
+        db_path,
+        make_job(apify_id="2", linkedin_url="l2", apply_url="a2", company_name="Harnham Ltd"),
+        sponsor(status="not_found"),
+        filter_result(),
+        "manual_review",
+        5,
+    )
+    first_id = get_jobs(db_path)[0]["id"]
+    update_user_status(db_path, first_id, "applied", "do not touch")
+
+    upsert_agency_company(db_path, "Harnham", added_by="test")
+    updated_count = apply_agency_status_to_jobs(db_path, "Harnham")
+    rows = get_jobs(db_path)
+
+    assert is_agency_company(db_path, "Harnham Ltd") is True
+    assert updated_count == 2
+    assert {row["sponsor_status"] for row in rows} == {"agency"}
+    assert get_jobs(db_path, {"user_status": "applied"})[0]["user_notes"] == "do not touch"
 
 
 def test_duplicate_detection_by_signature(tmp_path):

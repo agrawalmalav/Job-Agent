@@ -68,3 +68,19 @@ def get_distinct_fetched_dates(db_path):
 
 def get_latest_fetch_date(db_path):
     return _backend().get_latest_fetch_date(db_path)
+
+
+def get_agency_company(db_path, company_name):
+    return _backend().get_agency_company(db_path, company_name)
+
+
+def is_agency_company(db_path, company_name):
+    return _backend().is_agency_company(db_path, company_name)
+
+
+def upsert_agency_company(db_path, company_name, notes=None, added_by=None):
+    return _backend().upsert_agency_company(db_path, company_name, notes, added_by)
+
+
+def apply_agency_status_to_jobs(db_path, company_name):
+    return _backend().apply_agency_status_to_jobs(db_path, company_name)

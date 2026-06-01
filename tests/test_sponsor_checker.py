@@ -57,3 +57,53 @@ def test_missing_company_returns_not_found():
     assert result.status == "not_found"
     assert result.confidence == "low"
     assert result.matched_by == "none"
+
+
+def test_multi_word_company_requires_all_words_to_match():
+    rows = [
+        {"Organisation Name": "London Tech Limited"},
+        {"Organisation Name": "ABC Partners LLP"},
+        {"Organisation Name": "London Partners Limited"},
+    ]
+
+    result = check_company_sponsor("London Partners", rows, {})
+
+    assert result.status == "found"
+    assert result.confidence == "high"
+    assert result.matched_name == "London Partners Limited"
+    assert len(result.matched_rows) == 1
+
+
+def test_optional_group_word_not_required():
+    rows = [{"Organisation Name": "Woodstock Limited"}]
+
+    result = check_company_sponsor("Woodstock Group", rows, {})
+
+    assert result.status == "found"
+    assert result.confidence == "high"
+    assert result.matched_name == "Woodstock Limited"
+
+
+def test_agency_list_match_returns_agency():
+    result = check_company_sponsor(
+        "Harnham",
+        [{"Organisation Name": "Harnham Search and Selection Limited"}],
+        {},
+        agency_checker=lambda company_name: company_name.lower() == "harnham",
+    )
+
+    assert result.status == "agency"
+    assert result.confidence == "high"
+    assert result.matched_by == "agency_list"
+
+
+def test_single_generic_word_does_not_return_high_confidence_match():
+    rows = [
+        {"Organisation Name": "ABC Partners LLP"},
+        {"Organisation Name": "XYZ Partners Limited"},
+    ]
+
+    result = check_company_sponsor("Partners", rows, {})
+
+    assert result.status == "not_found"
+    assert result.confidence == "low"

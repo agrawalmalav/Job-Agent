@@ -5,6 +5,7 @@ from dataclasses import asdict
 from datetime import date, datetime
 from typing import Any
 
+from .company_utils import normalize_company_name
 from .models import BasicFilterResult, Job, PIPELINE_STATUSES, SponsorResult, USER_STATUSES
 from .supabase_client import get_supabase_client
 from .utils import json_dumps
@@ -340,3 +341,76 @@ def get_distinct_fetched_dates(db_path) -> list[str]:
 def get_latest_fetch_date(db_path) -> str | None:
     dates = get_distinct_fetched_dates(db_path)
     return dates[0] if dates else None
+
+
+def get_agency_company(db_path, company_name: str) -> dict | None:
+    normalized = normalize_company_name(company_name)
+    if not normalized:
+        return None
+    response = (
+        get_supabase_client()
+        .table("agency_companies")
+        .select("*")
+        .eq("normalized_company_name", normalized)
+        .limit(1)
+        .execute()
+    )
+    rows = _execute(response) or []
+    return rows[0] if rows else None
+
+
+def is_agency_company(db_path, company_name: str) -> bool:
+    return get_agency_company(db_path, company_name) is not None
+
+
+def upsert_agency_company(db_path, company_name: str, notes: str | None = None, added_by: str | None = None) -> None:
+    normalized = normalize_company_name(company_name)
+    if not normalized:
+        raise ValueError("company_name cannot be empty")
+    now = datetime.now().isoformat(timespec="seconds")
+    payload = {
+        "company_name": company_name,
+        "normalized_company_name": normalized,
+        "notes": notes,
+        "added_by": added_by,
+        "updated_at": now,
+    }
+    existing = get_agency_company(db_path, company_name)
+    if not existing:
+        payload["created_at"] = now
+    get_supabase_client().table("agency_companies").upsert(
+        payload,
+        on_conflict="normalized_company_name",
+    ).execute()
+
+
+def apply_agency_status_to_jobs(db_path, company_name: str) -> int:
+    normalized = normalize_company_name(company_name)
+    if not normalized:
+        return 0
+    rows = get_jobs(db_path)
+    matching_ids = [
+        row["id"]
+        for row in rows
+        if normalize_company_name(row.get("company_name") or "") == normalized and row.get("id") is not None
+    ]
+    if not matching_ids:
+        return 0
+    now = datetime.now().isoformat(timespec="seconds")
+    payload = {
+        "sponsor_status": "agency",
+        "sponsor_confidence": "high",
+        "sponsor_matched_by": "manual_agency",
+        "sponsor_search_terms": json_dumps([normalized]),
+        "sponsor_matched_name": company_name,
+        "sponsor_matched_rows": "",
+        "pipeline_status": "manual_review",
+        "status": "manual_review",
+        "rejection_stage": None,
+        "rejection_reason": "Recruitment agency / actual employer unknown",
+        "matched_rejection_keywords": "",
+        "final_score": 5,
+        "updated_at": now,
+    }
+    get_supabase_client().table("jobs").update(payload).in_("id", matching_ids).execute()
+    return len(matching_ids)
