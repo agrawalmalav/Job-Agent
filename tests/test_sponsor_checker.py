@@ -1,4 +1,4 @@
-from src.sponsor_checker import check_company_sponsor
+from src.sponsor_checker import check_company_sponsor, find_positive_sponsorship_phrase
 
 
 def test_direct_sponsor_match():
@@ -112,6 +112,38 @@ def test_manual_sponsor_override_takes_precedence_over_agency_and_sponsor_list()
     assert result.status == "self_confirmed"
     assert result.confidence == "high"
     assert result.matched_by == "manual_sponsor"
+
+
+def test_positive_sponsorship_phrase_is_detected():
+    phrase = find_positive_sponsorship_phrase("Benefits include visa sponsorship available for this role.")
+
+    assert phrase == "visa sponsorship available"
+
+
+def test_negative_sponsorship_phrase_is_not_positive():
+    phrase = find_positive_sponsorship_phrase("No visa sponsorship available for this role.")
+
+    assert phrase is None
+
+
+def test_custom_positive_sponsorship_phrase_can_be_configured():
+    phrase = find_positive_sponsorship_phrase(
+        "This role includes Skilled Worker support for the right candidate.",
+        positive_patterns=[r"skilled worker support"],
+        negative_patterns=[],
+    )
+
+    assert phrase == "skilled worker support"
+
+
+def test_invalid_regex_pattern_falls_back_to_phrase_matching():
+    phrase = find_positive_sponsorship_phrase(
+        "The package includes c++ visa support.",
+        positive_patterns=["c++ visa support"],
+        negative_patterns=[],
+    )
+
+    assert phrase == "c++ visa support"
 
 
 def test_single_generic_word_does_not_return_high_confidence_match():

@@ -14,6 +14,7 @@ from .models import SponsorResult
 from .report_generator import export_standard_csvs
 from .sponsor_checker import (
     check_company_sponsor,
+    find_positive_sponsorship_phrase,
     load_company_aliases,
     load_company_aliases_from_supabase,
     load_sponsor_list,
@@ -135,11 +136,35 @@ def _evaluate_job(
     else:
         sponsor_result = check_company_sponsor(
             job.company_name,
-            sponsor_rows,
-            aliases,
+            [],
+            {},
             agency_checker=agency_checker,
             sponsor_override_lookup=sponsor_override_lookup,
         )
+        if sponsor_result.status == "not_found":
+            description_match_config = config.get("sponsorship_description_match", {})
+            positive_phrase = find_positive_sponsorship_phrase(
+                job.description_text,
+                positive_patterns=description_match_config.get("positive_patterns"),
+                negative_patterns=description_match_config.get("negative_patterns"),
+            )
+            if positive_phrase:
+                sponsor_result = SponsorResult(
+                    status="found",
+                    confidence="high",
+                    matched_by="description",
+                    search_terms=[positive_phrase],
+                    matched_name=job.company_name,
+                    matched_rows=[],
+                )
+            else:
+                sponsor_result = check_company_sponsor(
+                    job.company_name,
+                    sponsor_rows,
+                    aliases,
+                    agency_checker=agency_checker,
+                    sponsor_override_lookup=sponsor_override_lookup,
+                )
     pipeline_status, final_score = _decide_status_and_score(filter_result, sponsor_result)
     return sponsor_result, filter_result, pipeline_status, final_score
 
@@ -297,9 +322,9 @@ def main() -> None:
     print(f"Accepted jobs: {summary['accepted_count']}")
     print(f"Manual review jobs: {summary['manual_review_count']}")
     print(f"Rejected jobs: {summary['rejected_count']}")
-    print(f"Pending user status: {summary['pending_count']}")
-    print(f"Applied user status: {summary['applied_count']}")
-    print(f"Referral requested user status: {summary['referral_requested_count']}")
+    print(f"Pending action: {summary['pending_count']}")
+    print(f"Applied action: {summary['applied_count']}")
+    print(f"Referral requested action: {summary['referral_requested_count']}")
     print(f"Dashboard: {summary['dashboard_command']}")
     print("CSV exports:")
     for name, path in summary["export_paths"].items():

@@ -14,6 +14,23 @@ paths:
   raw_dir: "data/raw"
   reports_dir: "reports"
 
+sponsorship_description_match:
+  positive_patterns:
+    - "\\bvisa sponsorship (?:is )?available\\b"
+    - "\\bsponsorship (?:is )?available\\b"
+    - "\\bvisa sponsorship (?:is )?(?:offered|provided)\\b"
+    - "\\bskilled worker visa sponsorship (?:is )?available\\b"
+    - "\\bcertificate of sponsorship (?:is )?available\\b"
+    - "\\bwe (?:can|are able to|will) sponsor\\b"
+    - "\\bable to sponsor (?:a )?(?:visa|visas|skilled worker visa)\\b"
+
+  negative_patterns:
+    - "\\bno\\b.{0,60}\\bsponsorship\\b"
+    - "\\bnot\\b.{0,60}\\bsponsorship\\b"
+    - "\\bwithout\\b.{0,60}\\bsponsorship\\b"
+    - "\\b(?:unable|cannot|can't)\\b.{0,60}\\bsponsor\\b"
+    - "\\b(?:do not|does not|will not)\\b.{0,60}\\bsponsor\\b"
+
 basic_filter:
   allowed_employment_types:
     - "full-time"

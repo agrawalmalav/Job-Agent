@@ -22,6 +22,25 @@ LIKELY_NAME_COLUMNS = (
     "sponsor_name",
 )
 
+DEFAULT_POSITIVE_SPONSORSHIP_PATTERNS = (
+    r"\bvisa sponsorship (?:is )?available\b",
+    r"\bsponsorship (?:is )?available\b",
+    r"\bvisa sponsorship (?:is )?(?:offered|provided)\b",
+    r"\bskilled worker visa sponsorship (?:is )?available\b",
+    r"\bcertificate of sponsorship (?:is )?available\b",
+    r"\bwe (?:can|are able to|will) sponsor\b",
+    r"\bable to sponsor (?:a )?(?:visa|visas|skilled worker visa)\b",
+)
+
+DEFAULT_NEGATIVE_SPONSORSHIP_GUARDS = (
+    r"\bno\b.{0,60}\bsponsorship\b",
+    r"\bnot\b.{0,60}\bsponsorship\b",
+    r"\bwithout\b.{0,60}\bsponsorship\b",
+    r"\b(?:unable|cannot|can't)\b.{0,60}\bsponsor\b",
+    r"\b(?:do not|does not|will not)\b.{0,60}\bsponsor\b",
+)
+
+
 def load_sponsor_list(csv_path: str | Path) -> list[dict]:
     path = Path(csv_path)
     if not path.exists():
@@ -105,6 +124,36 @@ def _normalize_text(value: str) -> str:
     normalized = value.lower().replace("&", " and ")
     normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
     return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _search_configured_pattern(pattern: str, text: str) -> re.Match | None:
+    try:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return match
+    except re.error:
+        pass
+    escaped = re.escape(pattern.lower())
+    return re.search(escaped, text, flags=re.IGNORECASE)
+
+
+def find_positive_sponsorship_phrase(
+    description_text: str | None,
+    positive_patterns: list[str] | tuple[str, ...] | None = None,
+    negative_patterns: list[str] | tuple[str, ...] | None = None,
+) -> str | None:
+    if not description_text:
+        return None
+    positive_patterns = positive_patterns or DEFAULT_POSITIVE_SPONSORSHIP_PATTERNS
+    negative_patterns = negative_patterns or DEFAULT_NEGATIVE_SPONSORSHIP_GUARDS
+    text = re.sub(r"\s+", " ", description_text.lower())
+    if any(_search_configured_pattern(pattern, text) for pattern in negative_patterns):
+        return None
+    for pattern in positive_patterns:
+        match = _search_configured_pattern(pattern, text)
+        if match:
+            return match.group(0)
+    return None
 
 
 def _find_phrase_matches(search_terms: list[str], sponsor_rows: list[dict]) -> tuple[list[str], list[str], list[str]]:

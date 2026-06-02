@@ -59,22 +59,40 @@ JOB_COLUMNS = [
 ]
 
 TABLE_COLUMNS = [
-    "id",
     "title",
     "company_name",
-    "location",
-    "posted_at",
-    "fetched_date",
-    "employment_type",
-    "workplace_type",
-    "sponsor_status",
-    "sponsor_confidence",
-    "pipeline_status",
     "user_status",
-    "user_notes",
+    "pipeline_status",
+    "sponsor_status",
     "apply_url",
     "linkedin_url",
+    "location",
+    "employment_type",
+    "salary",
+    "posted_at",
+    "fetched_date",
+    "workplace_type",
+    "sponsor_confidence",
+    "user_notes",
 ]
+
+TABLE_COLUMN_LABELS = {
+    "title": "Title",
+    "company_name": "Company",
+    "user_status": "Action",
+    "pipeline_status": "Status",
+    "sponsor_status": "Sponsor",
+    "apply_url": "Apply",
+    "linkedin_url": "LinkedIn",
+    "location": "Location",
+    "employment_type": "Employment",
+    "salary": "Salary",
+    "posted_at": "Posted",
+    "fetched_date": "Fetched",
+    "workplace_type": "Workplace",
+    "sponsor_confidence": "Sponsor Confidence",
+    "user_notes": "Notes",
+}
 
 
 def _paths() -> tuple[dict, str, str, str]:
@@ -211,7 +229,7 @@ def _render_detail(row: dict, db_path: str) -> None:
         key=f"dialog_sponsor_{row['id']}",
     )
     selected_pipeline_status = c3.selectbox(
-        "Pipeline status",
+        "Status",
         PIPELINE_STATUSES,
         index=PIPELINE_STATUSES.index(current_pipeline_status)
         if current_pipeline_status in PIPELINE_STATUSES
@@ -219,7 +237,7 @@ def _render_detail(row: dict, db_path: str) -> None:
         key=f"dialog_pipeline_{row['id']}",
     )
     selected_user_status = c3.selectbox(
-        "User status",
+        "Action",
         USER_STATUSES,
         index=USER_STATUSES.index(current_user_status) if current_user_status in USER_STATUSES else 0,
         key=f"dialog_user_{row['id']}",
@@ -311,9 +329,9 @@ def jobs_page(db_path: str) -> None:
 
     st.sidebar.header("Filters")
     fetched_date = _choice("Fetched date", dates, "fetched_date")
-    pipeline_status = _choice_with_default("Pipeline status", PIPELINE_STATUSES[:-1], "pipeline_status", "accepted")
+    pipeline_status = _choice_with_default("Status", PIPELINE_STATUSES[:-1], "pipeline_status", "accepted")
     user_status_options = ["pending", "All"] + [status for status in USER_STATUSES if status != "pending"]
-    user_status_selection = st.sidebar.selectbox("User status", user_status_options, key="user_status")
+    user_status_selection = st.sidebar.selectbox("Action", user_status_options, key="user_status")
     user_status = None if user_status_selection == "All" else user_status_selection
     sponsor_status = _choice(
         "Sponsor status",
@@ -343,7 +361,7 @@ def jobs_page(db_path: str) -> None:
     stats = get_job_stats(db_path)
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total", stats.get("total", 0))
-    c2.metric("Pending", stats.get("user_status", {}).get("pending", 0))
+    c2.metric("Pending Action", stats.get("user_status", {}).get("pending", 0))
     c3.metric("Applied", stats.get("user_status", {}).get("applied", 0))
     c4.metric("Showing", len(rows))
 
@@ -351,21 +369,28 @@ def jobs_page(db_path: str) -> None:
         st.info("No jobs match the current filters.")
         return
 
-    table_df = pd.DataFrame(rows).reindex(columns=TABLE_COLUMNS)
+    table_df = pd.DataFrame(rows).reindex(columns=TABLE_COLUMNS).rename(columns=TABLE_COLUMN_LABELS)
     table_event = st.dataframe(
         table_df,
         use_container_width=True,
         hide_index=True,
         height=520,
         column_config={
-            "apply_url": st.column_config.LinkColumn("Apply URL"),
-            "linkedin_url": st.column_config.LinkColumn("LinkedIn URL"),
+            "Title": st.column_config.TextColumn("Title", width="large", pinned=True),
+            "Company": st.column_config.TextColumn("Company", width="medium", pinned=True),
+            "Action": st.column_config.TextColumn("Action", width="small"),
+            "Status": st.column_config.TextColumn("Status", width="small"),
+            "Sponsor": st.column_config.TextColumn("Sponsor", width="small"),
+            "Apply": st.column_config.LinkColumn("Apply", width="small", display_text="Apply", max_chars=12),
+            "LinkedIn": st.column_config.LinkColumn("LinkedIn", width="small", display_text="LinkedIn", max_chars=12),
+            "Location": st.column_config.TextColumn("Location", width="medium"),
+            "Notes": st.column_config.TextColumn("Notes", width="medium"),
         },
         selection_mode="single-row",
         on_select="rerun",
         key="jobs_table",
     )
-    st.caption("Click a row to open its details and update statuses.")
+    st.caption("Click a row to open its details and update status/action.")
 
     selected_rows = table_event.selection.rows
     if selected_rows:
@@ -437,7 +462,7 @@ def _load_supabase_settings() -> dict:
         get_supabase_client()
         .table("settings")
         .select("key,value_json")
-        .in_("key", ["apify_config", "linkedin_search_urls", "basic_filter"])
+        .in_("key", ["apify_config", "linkedin_search_urls", "basic_filter", "sponsorship_description_match"])
         .execute()
     )
     rows = getattr(response, "data", None) or []
@@ -479,6 +504,7 @@ def _settings_page_supabase() -> None:
         "apify": settings.get("apify_config") or {},
         "linkedin_search_urls": settings.get("linkedin_search_urls") or [],
         "basic_filter": settings.get("basic_filter") or {},
+        "sponsorship_description_match": settings.get("sponsorship_description_match") or {},
         "paths": {},
     }
     updated = _config_form(config, show_paths=False)
@@ -486,6 +512,10 @@ def _settings_page_supabase() -> None:
         _save_supabase_setting("apify_config", updated.get("apify", {}))
         _save_supabase_setting("linkedin_search_urls", updated.get("linkedin_search_urls", []))
         _save_supabase_setting("basic_filter", updated.get("basic_filter", {}))
+        _save_supabase_setting(
+            "sponsorship_description_match",
+            updated.get("sponsorship_description_match", {}),
+        )
         st.success("Supabase settings saved.")
 
     st.subheader("Company aliases")
@@ -542,6 +572,7 @@ def _config_form(config: dict, show_paths: bool) -> dict | None:
     apify = config.get("apify", {})
     basic_filter = config.get("basic_filter", {})
     hard_reject = basic_filter.get("hard_reject_keywords", {})
+    description_match = config.get("sponsorship_description_match", {})
 
     with st.form("config_form"):
         st.subheader("Apify")
@@ -594,6 +625,18 @@ def _config_form(config: dict, show_paths: bool) -> dict | None:
             value=_list_to_text(basic_filter.get("seniority_match_fields", ["title", "standardized_title", "seniority_level"])),
             height=90,
         )
+        positive_sponsorship_patterns = st.text_area(
+            "Positive sponsorship description patterns",
+            value=_list_to_text(description_match.get("positive_patterns", [])),
+            height=150,
+            help="One case-insensitive regex pattern per line. Plain phrases also work.",
+        )
+        negative_sponsorship_patterns = st.text_area(
+            "Negative sponsorship guard patterns",
+            value=_list_to_text(description_match.get("negative_patterns", [])),
+            height=130,
+            help="If any of these patterns match, the positive description match is ignored.",
+        )
 
         submitted = st.form_submit_button("Save settings", type="primary")
     if not submitted:
@@ -621,6 +664,11 @@ def _config_form(config: dict, show_paths: bool) -> dict | None:
         "seniority_negative_keywords": _text_to_list(seniority_negative_keywords),
         "seniority_match_fields": _text_to_list(seniority_match_fields),
     }
+    updated_config["sponsorship_description_match"] = {
+        **description_match,
+        "positive_patterns": _text_to_list(positive_sponsorship_patterns),
+        "negative_patterns": _text_to_list(negative_sponsorship_patterns),
+    }
     return updated_config
 
 
@@ -640,7 +688,7 @@ def run_pipeline_page() -> None:
         "Fetch new jobs from Apify": "Calls Apify, saves the raw response, inserts only new jobs, and classifies them.",
         "Process latest saved Apify raw file as new jobs": "Does not call Apify. Uses the newest JSON in data/raw and inserts only new jobs.",
         "Recalculate matching jobs from latest saved raw file": "Does not insert new jobs. Updates existing matching jobs using current config, agency list, sponsor overrides, aliases, and sponsor list.",
-        "Recalculate every job already in the database": "Does not use Apify or raw files. Re-runs classification for all stored jobs while preserving user status and notes.",
+        "Recalculate every job already in the database": "Does not use Apify or raw files. Re-runs classification for all stored jobs while preserving action and notes.",
     }
     st.caption(mode_help[mode])
     debug_limit_enabled = st.checkbox("Debug limit raw jobs processed", value=False)
@@ -652,7 +700,7 @@ def run_pipeline_page() -> None:
         "Recalculate matching jobs from latest saved raw file",
         "Recalculate every job already in the database",
     }:
-        st.info("Manual sponsor values such as agency, self confirmed, and self rejected are preserved through their company lists. User status and notes are not changed.")
+        st.info("Manual sponsor values such as agency, self confirmed, and self rejected are preserved through their company lists. Action and notes are not changed.")
 
     if st.button("Run selected pipeline action", type="primary"):
         with st.spinner("Running pipeline..."):
@@ -680,8 +728,8 @@ def exports_page(db_path: str, reports_dir: str) -> None:
         st.json(paths)
 
     st.subheader("Custom export")
-    pipeline_status = st.selectbox("Pipeline status", ["All"] + PIPELINE_STATUSES[:-1])
-    user_status = st.selectbox("User status", ["All"] + USER_STATUSES)
+    pipeline_status = st.selectbox("Status", ["All"] + PIPELINE_STATUSES[:-1])
+    user_status = st.selectbox("Action", ["All"] + USER_STATUSES)
     filters = {}
     if pipeline_status != "All":
         filters["pipeline_status"] = pipeline_status

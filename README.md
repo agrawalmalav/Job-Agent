@@ -86,12 +86,12 @@ streamlit run src/dashboard.py
 
 The dashboard has tabs for:
 
-- `Jobs`: filter jobs, open links, update `user_status`, and save notes.
+- `Jobs`: filter jobs, open links, update Action, and save notes.
 - `Settings`: edit local YAML in local mode, or edit Supabase settings when `CONFIG_BACKEND=supabase`.
 - `Run Pipeline`: trigger the fetch/filter/store pipeline manually.
 - `Exports / Reports`: generate CSV exports.
 
-Default job view shows accepted and pending jobs. You can filter by fetched date, pipeline status, user status, sponsor status, company, location, keyword, and workplace type.
+Default job view shows accepted and pending jobs. You can filter by fetched date, Status, Action, sponsor status, company, location, keyword, and workplace type.
 
 ## Streamlit Login Setup
 
@@ -148,6 +148,24 @@ data/2026-05-22_sponsor_list.csv
 Replace that file or update `paths.sponsor_csv` in `config.yaml` when you download a newer sponsor list. The CSV is assumed to already be filtered to useful routes such as Skilled Worker and Scale-up, so the code does not do route filtering.
 
 Company appearing on the UK sponsor list does not guarantee sponsorship for a specific role.
+
+## Sponsor Description Phrases
+
+Some jobs explicitly say sponsorship is available. Edit `config.yaml` under `sponsorship_description_match` to add positive or negative description patterns. You can also edit these in the dashboard Settings tab.
+
+Simple phrases work, and regex patterns are supported for flexible matching:
+
+```yaml
+sponsorship_description_match:
+  positive_patterns:
+    - "visa sponsorship available"
+    - "skilled worker support"
+  negative_patterns:
+    - "no visa sponsorship"
+    - "sponsorship not available"
+```
+
+Positive matches mark the sponsor as found by description before checking the sponsor list. Negative patterns prevent false positives.
 
 ## Company Aliases
 

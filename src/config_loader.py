@@ -28,7 +28,7 @@ def load_config_from_supabase() -> dict[str, Any]:
         get_supabase_client()
         .table("settings")
         .select("key,value_json")
-        .in_("key", ["apify_config", "linkedin_search_urls", "basic_filter"])
+        .in_("key", ["apify_config", "linkedin_search_urls", "basic_filter", "sponsorship_description_match"])
         .execute()
     )
     rows = getattr(response, "data", None) or []
@@ -38,6 +38,7 @@ def load_config_from_supabase() -> dict[str, Any]:
         "linkedin_search_urls": settings.get("linkedin_search_urls") or [],
         "paths": DEFAULT_PATHS.copy(),
         "basic_filter": settings.get("basic_filter") or {},
+        "sponsorship_description_match": settings.get("sponsorship_description_match") or {},
     }
 
 
