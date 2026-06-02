@@ -21,11 +21,14 @@ from src.report_generator import export_jobs_csv, export_standard_csvs
 from src.sponsor_checker import load_sponsor_list
 from src.storage_router import (
     apply_agency_status_to_jobs,
+    apply_sponsor_override_to_jobs,
+    delete_sponsor_override,
     get_distinct_fetched_dates,
     get_job_stats,
     get_jobs,
     init_db,
     upsert_agency_company,
+    upsert_sponsor_override,
     update_pipeline_status,
     update_user_status,
 )
@@ -173,22 +176,40 @@ def _sponsor_display_rows(rows: list[dict]) -> pd.DataFrame:
 
 
 def _render_detail(row: dict, db_path: str) -> None:
-    st.subheader("Selected Job Details")
     title = row.get("title") or "Untitled role"
     company = row.get("company_name") or "Unknown company"
     st.markdown(f"### {title}")
-    st.caption(company)
+    st.markdown(f"### {company}")
+    st.caption(f"Posted: {row.get('posted_at') or 'Unknown'} | Fetched: {row.get('fetched_date') or 'Unknown'}")
 
     c1, c2, c3 = st.columns(3)
     c1.write(f"**Location:** {row.get('location') or ''}")
-    c1.write(f"**Posted:** {row.get('posted_at') or ''}")
-    c1.write(f"**Fetched:** {row.get('fetched_date') or ''}")
     c2.write(f"**Employment:** {row.get('employment_type') or ''}")
     c2.write(f"**Seniority:** {row.get('seniority_level') or ''}")
     c2.write(f"**Workplace:** {row.get('workplace_type') or ''}")
 
     current_pipeline_status = row.get("pipeline_status") or "manual_review"
     current_user_status = row.get("user_status") or "pending"
+    current_sponsor_status = row.get("sponsor_status") or "not_found"
+    manual_sponsor_options = {
+        "Agency": "agency",
+        "Self confirmed": "self_confirmed",
+        "Self rejected": "self_rejected",
+    }
+    sponsor_label_by_status = {value: label for label, value in manual_sponsor_options.items()}
+    if current_sponsor_status in sponsor_label_by_status:
+        sponsor_options = list(manual_sponsor_options)
+        sponsor_index = sponsor_options.index(sponsor_label_by_status[current_sponsor_status])
+    else:
+        auto_label = f"Auto: {current_sponsor_status}"
+        sponsor_options = [auto_label, *manual_sponsor_options]
+        sponsor_index = 0
+    selected_sponsor_label = c3.selectbox(
+        "Sponsor",
+        sponsor_options,
+        index=sponsor_index,
+        key=f"dialog_sponsor_{row['id']}",
+    )
     selected_pipeline_status = c3.selectbox(
         "Pipeline status",
         PIPELINE_STATUSES,
@@ -203,9 +224,13 @@ def _render_detail(row: dict, db_path: str) -> None:
         index=USER_STATUSES.index(current_user_status) if current_user_status in USER_STATUSES else 0,
         key=f"dialog_user_{row['id']}",
     )
-    c3.write(f"**Sponsor:** {row.get('sponsor_status') or ''} ({row.get('sponsor_confidence') or ''})")
-    if row.get("sponsor_status") == "agency":
+    c3.caption(f"Confidence: {row.get('sponsor_confidence') or 'unknown'}")
+    if current_sponsor_status == "agency":
         c3.warning("Agency / actual employer unknown")
+    elif current_sponsor_status == "self_confirmed":
+        c3.success("Self confirmed sponsor")
+    elif current_sponsor_status == "self_rejected":
+        c3.warning("Self rejected sponsor")
 
     link_cols = st.columns(2)
     if row.get("apply_url"):
@@ -227,23 +252,6 @@ def _render_detail(row: dict, db_path: str) -> None:
         key=f"dialog_notes_{row['id']}",
     )
 
-    sponsor_classification = st.selectbox(
-        "Sponsor classification",
-        ["Auto", "Agency"],
-        index=1 if row.get("sponsor_status") == "agency" else 0,
-        key=f"dialog_sponsor_classification_{row['id']}",
-    )
-    if sponsor_classification == "Agency" and row.get("sponsor_status") != "agency":
-        upsert_agency_company(
-            db_path,
-            row.get("company_name") or "",
-            notes="Marked from dashboard",
-            added_by=st.session_state.get("username"),
-        )
-        updated_count = apply_agency_status_to_jobs(db_path, row.get("company_name") or "")
-        st.success(f"Marked {row.get('company_name')} as agency and updated {updated_count} existing jobs.")
-        st.rerun()
-
     if row.get("sponsor_matched_name"):
         st.markdown("#### Sponsor Match")
         st.write(f"Company found on sponsor list: `{row['sponsor_matched_name']}`")
@@ -256,6 +264,31 @@ def _render_detail(row: dict, db_path: str) -> None:
             st.dataframe(sponsor_matches, use_container_width=True, hide_index=True)
 
     changed = False
+    selected_manual_sponsor_status = manual_sponsor_options.get(selected_sponsor_label)
+    if selected_manual_sponsor_status and selected_manual_sponsor_status != current_sponsor_status:
+        if selected_manual_sponsor_status == "agency":
+            delete_sponsor_override(db_path, company)
+            upsert_agency_company(
+                db_path,
+                company,
+                notes="Marked from dashboard",
+                added_by=st.session_state.get("username"),
+            )
+            updated_count = apply_agency_status_to_jobs(db_path, company)
+            st.success(f"Marked {company} as agency and updated {updated_count} existing jobs.")
+        else:
+            upsert_sponsor_override(
+                db_path,
+                company,
+                selected_manual_sponsor_status,
+                notes="Marked from dashboard",
+                added_by=st.session_state.get("username"),
+            )
+            updated_count = apply_sponsor_override_to_jobs(db_path, company, selected_manual_sponsor_status)
+            label = selected_sponsor_label.lower()
+            st.success(f"Marked {company} as {label} and updated {updated_count} existing jobs.")
+        st.rerun()
+
     if selected_pipeline_status != current_pipeline_status:
         update_pipeline_status(db_path, row["id"], selected_pipeline_status)
         changed = True
@@ -282,7 +315,11 @@ def jobs_page(db_path: str) -> None:
     user_status_options = ["pending", "All"] + [status for status in USER_STATUSES if status != "pending"]
     user_status_selection = st.sidebar.selectbox("User status", user_status_options, key="user_status")
     user_status = None if user_status_selection == "All" else user_status_selection
-    sponsor_status = _choice("Sponsor status", ["found", "possible", "not_found", "agency"], "sponsor_status")
+    sponsor_status = _choice(
+        "Sponsor status",
+        ["found", "possible", "not_found", "agency", "self_confirmed", "self_rejected"],
+        "sponsor_status",
+    )
     company_search = st.sidebar.text_input("Company search")
     location_search = st.sidebar.text_input("Location search")
     keyword = st.sidebar.text_input("Keyword search")
@@ -589,34 +626,42 @@ def _config_form(config: dict, show_paths: bool) -> dict | None:
 
 def run_pipeline_page() -> None:
     st.header("Run Pipeline")
-    st.write("Trigger the fetch/filter/store pipeline, or reprocess existing jobs after config changes.")
+    st.write("Choose whether to fetch new jobs or only recalculate classifications after settings/list changes.")
     mode = st.radio(
-        "Run mode",
+        "Pipeline action",
         [
-            "Fetch from Apify and process new jobs",
-            "Use latest raw file and process new jobs",
-            "Reprocess latest raw file and update existing jobs",
-            "Reprocess all jobs already in database",
+            "Fetch new jobs from Apify",
+            "Process latest saved Apify raw file as new jobs",
+            "Recalculate matching jobs from latest saved raw file",
+            "Recalculate every job already in the database",
         ],
     )
+    mode_help = {
+        "Fetch new jobs from Apify": "Calls Apify, saves the raw response, inserts only new jobs, and classifies them.",
+        "Process latest saved Apify raw file as new jobs": "Does not call Apify. Uses the newest JSON in data/raw and inserts only new jobs.",
+        "Recalculate matching jobs from latest saved raw file": "Does not insert new jobs. Updates existing matching jobs using current config, agency list, sponsor overrides, aliases, and sponsor list.",
+        "Recalculate every job already in the database": "Does not use Apify or raw files. Re-runs classification for all stored jobs while preserving user status and notes.",
+    }
+    st.caption(mode_help[mode])
     debug_limit_enabled = st.checkbox("Debug limit raw jobs processed", value=False)
     debug_limit = None
     if debug_limit_enabled:
         debug_limit = st.number_input("Debug limit", min_value=1, step=1, value=15)
 
-    if mode == "Reprocess latest raw file and update existing jobs":
-        st.info("This uses the latest saved Apify raw JSON file. It updates pipeline status, sponsor fields, rejection reasons, and scores for matching existing jobs. It does not change user status or notes.")
-    elif mode == "Reprocess all jobs already in database":
-        st.info("This recalculates every job currently stored in the database. It does not use Apify and does not change user status or notes.")
+    if mode in {
+        "Recalculate matching jobs from latest saved raw file",
+        "Recalculate every job already in the database",
+    }:
+        st.info("Manual sponsor values such as agency, self confirmed, and self rejected are preserved through their company lists. User status and notes are not changed.")
 
     if st.button("Run selected pipeline action", type="primary"):
         with st.spinner("Running pipeline..."):
             try:
-                if mode == "Fetch from Apify and process new jobs":
+                if mode == "Fetch new jobs from Apify":
                     summary = run_pipeline(str(CONFIG_PATH), no_fetch=False, debug_limit=debug_limit)
-                elif mode == "Use latest raw file and process new jobs":
+                elif mode == "Process latest saved Apify raw file as new jobs":
                     summary = run_pipeline(str(CONFIG_PATH), no_fetch=True, debug_limit=debug_limit)
-                elif mode == "Reprocess latest raw file and update existing jobs":
+                elif mode == "Recalculate matching jobs from latest saved raw file":
                     summary = reprocess_jobs(str(CONFIG_PATH), scope="latest_raw", debug_limit=debug_limit)
                 else:
                     summary = reprocess_jobs(str(CONFIG_PATH), scope="all_db", debug_limit=debug_limit)

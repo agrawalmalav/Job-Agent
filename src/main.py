@@ -20,7 +20,7 @@ from .sponsor_checker import (
     load_sponsor_list_from_supabase,
 )
 from .storage_router import get_job_stats, init_db, insert_job, job_exists
-from .storage_router import find_duplicate_job, get_jobs, is_agency_company, update_pipeline_result
+from .storage_router import find_duplicate_job, get_jobs, get_sponsor_override, is_agency_company, update_pipeline_result
 
 
 def parse_args() -> argparse.Namespace:
@@ -44,7 +44,11 @@ def resolve_path(base_dir: Path, value: str) -> str:
 def _decide_status_and_score(filter_result, sponsor_result: SponsorResult) -> tuple[str, int]:
     if filter_result.hard_rejected:
         return "rejected", 0
+    if sponsor_result.status == "self_confirmed":
+        return "accepted", 20
     if sponsor_result.status == "agency":
+        return "manual_review", 5
+    if sponsor_result.status == "self_rejected":
         return "manual_review", 5
     if sponsor_result.status == "found":
         return "accepted", 20
@@ -112,13 +116,30 @@ def _evaluate_job(
     db_path: str | None = None,
 ) -> tuple[SponsorResult, object, str, int]:
     filter_result = run_basic_filter(job, config)
+    agency_checker = None
+    sponsor_override_lookup = None
+    if db_path is not None:
+        agency_checker = lambda company_name: is_agency_company(db_path, company_name)
+        sponsor_override_lookup = lambda company_name: get_sponsor_override(db_path, company_name)
+
     if filter_result.hard_rejected:
-        sponsor_result = SponsorResult(status="not_found", confidence="low", matched_by="none")
+        sponsor_result = check_company_sponsor(
+            job.company_name,
+            [],
+            {},
+            agency_checker=agency_checker,
+            sponsor_override_lookup=sponsor_override_lookup,
+        )
+        if sponsor_result.status == "not_found":
+            sponsor_result = SponsorResult(status="not_found", confidence="low", matched_by="none")
     else:
-        agency_checker = None
-        if db_path is not None:
-            agency_checker = lambda company_name: is_agency_company(db_path, company_name)
-        sponsor_result = check_company_sponsor(job.company_name, sponsor_rows, aliases, agency_checker=agency_checker)
+        sponsor_result = check_company_sponsor(
+            job.company_name,
+            sponsor_rows,
+            aliases,
+            agency_checker=agency_checker,
+            sponsor_override_lookup=sponsor_override_lookup,
+        )
     pipeline_status, final_score = _decide_status_and_score(filter_result, sponsor_result)
     return sponsor_result, filter_result, pipeline_status, final_score
 

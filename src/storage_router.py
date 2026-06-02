@@ -78,9 +78,25 @@ def is_agency_company(db_path, company_name):
     return _backend().is_agency_company(db_path, company_name)
 
 
+def get_sponsor_override(db_path, company_name):
+    return _backend().get_sponsor_override(db_path, company_name)
+
+
+def upsert_sponsor_override(db_path, company_name, sponsor_status, notes=None, added_by=None):
+    return _backend().upsert_sponsor_override(db_path, company_name, sponsor_status, notes, added_by)
+
+
+def delete_sponsor_override(db_path, company_name):
+    return _backend().delete_sponsor_override(db_path, company_name)
+
+
 def upsert_agency_company(db_path, company_name, notes=None, added_by=None):
     return _backend().upsert_agency_company(db_path, company_name, notes, added_by)
 
 
 def apply_agency_status_to_jobs(db_path, company_name):
     return _backend().apply_agency_status_to_jobs(db_path, company_name)
+
+
+def apply_sponsor_override_to_jobs(db_path, company_name, sponsor_status):
+    return _backend().apply_sponsor_override_to_jobs(db_path, company_name, sponsor_status)

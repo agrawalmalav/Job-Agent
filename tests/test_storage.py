@@ -12,6 +12,9 @@ from src.storage import (
     upsert_agency_company,
     is_agency_company,
     apply_agency_status_to_jobs,
+    upsert_sponsor_override,
+    get_sponsor_override,
+    apply_sponsor_override_to_jobs,
 )
 
 
@@ -236,6 +239,46 @@ def test_agency_company_updates_matching_jobs_without_user_status(tmp_path):
     assert updated_count == 2
     assert {row["sponsor_status"] for row in rows} == {"agency"}
     assert get_jobs(db_path, {"user_status": "applied"})[0]["user_notes"] == "do not touch"
+
+
+def test_sponsor_override_updates_matching_jobs_without_user_status(tmp_path):
+    db_path = tmp_path / "jobs.sqlite"
+    init_db(db_path)
+    insert_job(db_path, make_job(company_name="Acme Software"), sponsor(status="not_found"), filter_result(), "manual_review", 5)
+    insert_job(
+        db_path,
+        make_job(apify_id="2", linkedin_url="l2", apply_url="a2", company_name="Acme Software Ltd"),
+        sponsor(status="not_found"),
+        filter_result(),
+        "manual_review",
+        5,
+    )
+    first_id = get_jobs(db_path)[0]["id"]
+    update_user_status(db_path, first_id, "referral_requested", "keep this")
+
+    upsert_sponsor_override(db_path, "Acme Software", "self_confirmed", added_by="test")
+    updated_count = apply_sponsor_override_to_jobs(db_path, "Acme Software", "self_confirmed")
+    rows = get_jobs(db_path)
+
+    assert get_sponsor_override(db_path, "Acme Software Ltd")["sponsor_status"] == "self_confirmed"
+    assert updated_count == 2
+    assert {row["sponsor_status"] for row in rows} == {"self_confirmed"}
+    assert {row["pipeline_status"] for row in rows} == {"accepted"}
+    assert get_jobs(db_path, {"user_status": "referral_requested"})[0]["user_notes"] == "keep this"
+
+
+def test_sponsor_override_self_rejected_sets_manual_review(tmp_path):
+    db_path = tmp_path / "jobs.sqlite"
+    init_db(db_path)
+    insert_job(db_path, make_job(company_name="Acme Software"), sponsor(status="found"), filter_result(), "accepted", 20)
+
+    upsert_sponsor_override(db_path, "Acme Software", "self_rejected", added_by="test")
+    apply_sponsor_override_to_jobs(db_path, "Acme Software", "self_rejected")
+    row = get_jobs(db_path)[0]
+
+    assert row["sponsor_status"] == "self_rejected"
+    assert row["pipeline_status"] == "manual_review"
+    assert row["rejection_reason"] == "Manually verified sponsorship unavailable"
 
 
 def test_duplicate_detection_by_signature(tmp_path):

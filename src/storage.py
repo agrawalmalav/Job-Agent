@@ -200,6 +200,23 @@ def init_db(db_path: str | Path) -> None:
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_agency_companies_normalized ON agency_companies(normalized_company_name)"
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sponsor_overrides (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_name TEXT NOT NULL,
+                normalized_company_name TEXT NOT NULL UNIQUE,
+                sponsor_status TEXT NOT NULL,
+                notes TEXT,
+                added_by TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sponsor_overrides_normalized ON sponsor_overrides(normalized_company_name)"
+        )
         existing_columns = _columns(connection)
         for column, definition in SCHEMA_COLUMNS.items():
             if column not in existing_columns:
@@ -520,6 +537,68 @@ def is_agency_company(db_path: str | Path, company_name: str) -> bool:
     return get_agency_company(db_path, company_name) is not None
 
 
+def get_sponsor_override(db_path: str | Path, company_name: str) -> dict | None:
+    normalized = normalize_company_name(company_name)
+    if not normalized:
+        return None
+    with _connect(db_path) as connection:
+        row = connection.execute(
+            "SELECT * FROM sponsor_overrides WHERE normalized_company_name = ? LIMIT 1",
+            (normalized,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def upsert_sponsor_override(
+    db_path: str | Path,
+    company_name: str,
+    sponsor_status: str,
+    notes: str | None = None,
+    added_by: str | None = None,
+) -> None:
+    if sponsor_status not in {"self_confirmed", "self_rejected"}:
+        raise ValueError(f"Invalid sponsor override status: {sponsor_status}")
+    normalized = normalize_company_name(company_name)
+    if not normalized:
+        raise ValueError("company_name cannot be empty")
+    now = datetime.now().isoformat(timespec="seconds")
+    with _connect(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO sponsor_overrides (
+                company_name,
+                normalized_company_name,
+                sponsor_status,
+                notes,
+                added_by,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(normalized_company_name) DO UPDATE SET
+                company_name = excluded.company_name,
+                sponsor_status = excluded.sponsor_status,
+                notes = COALESCE(excluded.notes, sponsor_overrides.notes),
+                added_by = COALESCE(excluded.added_by, sponsor_overrides.added_by),
+                updated_at = excluded.updated_at
+            """,
+            (company_name, normalized, sponsor_status, notes, added_by, now, now),
+        )
+        connection.commit()
+
+
+def delete_sponsor_override(db_path: str | Path, company_name: str) -> None:
+    normalized = normalize_company_name(company_name)
+    if not normalized:
+        return
+    with _connect(db_path) as connection:
+        connection.execute(
+            "DELETE FROM sponsor_overrides WHERE normalized_company_name = ?",
+            (normalized,),
+        )
+        connection.commit()
+
+
 def upsert_agency_company(
     db_path: str | Path,
     company_name: str,
@@ -578,6 +657,65 @@ def apply_agency_status_to_jobs(db_path: str | Path, company_name: str) -> int:
                 WHERE id = ?
                 """,
                 (json_dumps([normalized]), company_name, now, job_id),
+            )
+        connection.commit()
+    return len(matching_ids)
+
+
+def apply_sponsor_override_to_jobs(db_path: str | Path, company_name: str, sponsor_status: str) -> int:
+    if sponsor_status not in {"self_confirmed", "self_rejected"}:
+        raise ValueError(f"Invalid sponsor override status: {sponsor_status}")
+    normalized = normalize_company_name(company_name)
+    if not normalized:
+        return 0
+
+    if sponsor_status == "self_confirmed":
+        pipeline_status = "accepted"
+        rejection_reason = None
+        final_score = 20
+    else:
+        pipeline_status = "manual_review"
+        rejection_reason = "Manually verified sponsorship unavailable"
+        final_score = 5
+
+    now = datetime.now().isoformat(timespec="seconds")
+    with _connect(db_path) as connection:
+        rows = connection.execute("SELECT id, company_name FROM jobs").fetchall()
+        matching_ids = [
+            row["id"]
+            for row in rows
+            if normalize_company_name(row["company_name"] or "") == normalized
+        ]
+        for job_id in matching_ids:
+            connection.execute(
+                """
+                UPDATE jobs
+                SET sponsor_status = ?,
+                    sponsor_confidence = 'high',
+                    sponsor_matched_by = 'manual_sponsor',
+                    sponsor_search_terms = ?,
+                    sponsor_matched_name = ?,
+                    sponsor_matched_rows = '',
+                    pipeline_status = ?,
+                    status = ?,
+                    rejection_stage = NULL,
+                    rejection_reason = ?,
+                    matched_rejection_keywords = '',
+                    final_score = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    sponsor_status,
+                    json_dumps([normalized]),
+                    company_name,
+                    pipeline_status,
+                    pipeline_status,
+                    rejection_reason,
+                    final_score,
+                    now,
+                    job_id,
+                ),
             )
         connection.commit()
     return len(matching_ids)

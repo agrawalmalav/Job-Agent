@@ -181,8 +181,28 @@ def _alias_terms(company_name: str, aliases: dict) -> list[str]:
     return list(dict.fromkeys(terms))
 
 
-def check_company_sponsor(company_name: str, sponsor_rows: list[dict], aliases: dict, agency_checker=None) -> SponsorResult:
+def check_company_sponsor(
+    company_name: str,
+    sponsor_rows: list[dict],
+    aliases: dict,
+    agency_checker=None,
+    sponsor_override_lookup=None,
+) -> SponsorResult:
     normalized_company_name = normalize_company_name(company_name)
+    if sponsor_override_lookup:
+        override = sponsor_override_lookup(company_name)
+        if override:
+            sponsor_status = override.get("sponsor_status")
+            if sponsor_status in {"self_confirmed", "self_rejected"}:
+                return SponsorResult(
+                    status=sponsor_status,
+                    confidence="high",
+                    matched_by="manual_sponsor",
+                    search_terms=[normalized_company_name],
+                    matched_name=override.get("company_name") or company_name,
+                    matched_rows=[],
+                )
+
     if agency_checker and agency_checker(company_name):
         return SponsorResult(
             status="agency",

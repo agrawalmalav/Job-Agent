@@ -97,6 +97,23 @@ def test_agency_list_match_returns_agency():
     assert result.matched_by == "agency_list"
 
 
+def test_manual_sponsor_override_takes_precedence_over_agency_and_sponsor_list():
+    result = check_company_sponsor(
+        "Harnham",
+        [{"Organisation Name": "Harnham Search and Selection Limited"}],
+        {},
+        agency_checker=lambda company_name: True,
+        sponsor_override_lookup=lambda company_name: {
+            "company_name": company_name,
+            "sponsor_status": "self_confirmed",
+        },
+    )
+
+    assert result.status == "self_confirmed"
+    assert result.confidence == "high"
+    assert result.matched_by == "manual_sponsor"
+
+
 def test_single_generic_word_does_not_return_high_confidence_match():
     rows = [
         {"Organisation Name": "ABC Partners LLP"},
